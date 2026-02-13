@@ -1,10 +1,10 @@
-# Lattice DMRG 
+# nssDMRG 
 
 [![CI DMRG workflow](https://github.com/aamaricci/Lattice_DMRG/actions/workflows/PushWorkflow.yml/badge.svg)](https://github.com/aamaricci/Lattice_DMRG/actions/workflows/PushWorkflow.yml)
 
-This is a simple, yet complete, **parallel DMRG library** to solve interacting spin-S (Heisenberg) and fermions (Hubbard) models in 1D. The software exploits consevation of the Quantum Numbers (e.g. $S_z$ or $[N_\uparrow,N_\downarrow]$), high-performance objects/algorithms and distributed MPI framework to perform *infinite* and *finite* DMRG algorithms.  
+[Not-So-Simple-DMRG]: A High-Performance Massively **Parallel DMRG library** to solve interacting spin-S (Heisenberg) and fermions (Hubbard) models in 1D. The software exploits consevation of Abelian Quantum Numbers (e.g. $S_z$ or $[N_\uparrow,N_\downarrow]$), scalable objects & algorithms with distributed MPI framework to perform *infinite* and *finite* DMRG algorithms, with Open and Periodic Boundary Condition.  
  
-The structure of this code is largely inspired by the simple-DMRG project: [GitHub](https://github.com/simple-dmrg/simple-dmrg) and [Zenodo](https://zenodo.org/record/1068359).
+The structure of this code is largely inspired by the excellent simple-DMRG project: [GitHub](https://github.com/simple-dmrg/simple-dmrg) and [Zenodo](https://zenodo.org/record/1068359), but somehow diverged in its very nature, thus the name.
 
 
 ### Table of Contents
