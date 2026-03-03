@@ -454,7 +454,7 @@ contains
   function sb_vecDim_Hv() result(vecDim)
     integer                          :: vecDim           !vector or vector chunck dimension
     real(8),dimension(:),allocatable :: qn
-    integer                          :: q,Nsb,i
+    integer                          :: q,Nsb,i,unit
     !
     Nsb  = size(sb_sector)
     if(allocated(Dls))deallocate(Dls)
@@ -475,19 +475,22 @@ contains
           mpiDl(q)  = Drs(q)*mpiDls(q)
        enddo
     else
-       do q=1,size(sb_sector)
-          mpiDl(q) = Drs(q)*Dls(q)
+       do q=1,Nsb
+          mpiDls(q)= Dls(q)
+          mpiDl(q)  = Drs(q)*mpiDls(q)
        enddo
        if(sum(mpiDl)/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
     endif
 #else
-    do q=1,size(sb_sector)
-       mpiDl(q) = Drs(q)*Dls(q)
+    do q=1,Nsb
+       mpiDls(q)= Dls(q)
+       mpiDl(q)  = Drs(q)*mpiDls(q)
     enddo
     if(sum(mpiDl)/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
 #endif
     !
     vecDim = sum(mpiDl)
+    kb_vecDim = vecDim*DATA_kb_size
   end function sb_vecDim_Hv
 
 

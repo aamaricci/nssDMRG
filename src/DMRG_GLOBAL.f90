@@ -154,6 +154,7 @@ MODULE DMRG_GLOBAL
   real(8)                                        :: t_sctr           !_GLOBAL
   real(8)                                        :: t_gthr           !_GLOBAL
   real(8)                                        :: t_agthr          !_GLOBAL
+  real(8)                                        :: kb_vecDim
   real(8)                                        :: kb_sent_a2av
   real(8)                                        :: kb_recv_a2av
   real(8)                                        :: kb_sent_sctr
@@ -254,6 +255,7 @@ contains
     t_rdm_get         = 0d0 !_RDM
     t_rdm_diag        = 0d0 !_RDM
     t_rdm_renorm      = 0d0 !_RDM
+    kb_vecDim         = 0d0
     kb_sent_a2av      = 0d0
     kb_recv_a2av      = 0d0
     kb_sent_sctr      = 0d0
@@ -274,10 +276,13 @@ contains
 
 
   subroutine set_profile
-    integer :: unit,i,Ierr
+    integer :: unit,i,Ierr,q
 #ifdef _PROFILE
 #ifdef _MPI
     if(MpiStatus)then
+       call Sum_MPI(MpiComm,kb_vecDim)
+       kb_vecDim=kb_vecDim/MpiSize
+       !
        call Max_MPI(MpiComm,t_enlarge_blocks)
        !
        call Max_MPI(MpiComm,t_sb_get_states)
@@ -301,6 +306,7 @@ contains
        call Max_MPI(MpiComm,t_hxv_B)
        call Max_MPI(MpiComm,t_hxv_A)
        !
+
        call Max_MPI(MpiComm,t_a2av)
        call Sum_MPI(MpiComm,kb_sent_a2av)
        call Sum_MPI(MpiComm,kb_recv_a2av)
@@ -319,6 +325,7 @@ contains
     !
     call append_profile("total_length_sb",dble(left%length + right%length))
     call append_profile("reduced_sb_dim",rdcd_sb_dim)
+    call append_profile("kb_vecDim_av",kb_vecDim)
     call append_profile("full_sb_dim",full_sb_dim)
     call append_profile("time_enlarge_blocks",t_enlarge_blocks) !>= t_connect_blocks
     !
@@ -364,6 +371,25 @@ contains
        enddo
        write(unit,*)""
        close(unit)
+       !
+       if(MpiMaster)then
+          call sb_build_dims()
+          unit=fopen("sb_shares_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+          write(unit,*)"# STEP:",left%length
+          do q=1,size(sb_sector)
+#ifdef _MPI
+             if(MpiStatus)then
+                write(unit,*)q,mpiDls(q)*Drs(q),mpiDls(q),Drs(q)
+             else
+                write(unit,*)q,Dls(q)*Drs(q),Dls(q),Drs(q)
+             endif
+#else
+             write(unit,*)q,Dls(q)*Drs(q),Dls(q),Drs(q)
+#endif
+          enddo
+          write(unit,*)""
+          close(unit)
+       endif
     endif
 #endif
     call reset_profile()
@@ -480,9 +506,9 @@ contains
     MpiMaster      = get_Master_MPI(MpiComm_Global)
     !
     !Returns the byte dimension for a single element of MPI_DOUBLE_PRECISION/COMPLEX type
-    call MPI_Type_size(MPI_DOUBLE_COMPLEX, typesize, ierr);C_kb_size =dble(typesize)/1000d0
-    call MPI_Type_size(MPI_DOUBLE_PRECISION,typesize,ierr);D_kb_size =dble(typesize)/1000d0
-    call MPI_Type_size(MPI_INTEGER, typesize, ierr)       ;I_kb_size =dble(typesize)/1000d0
+    call MPI_Type_size(MPI_DOUBLE_COMPLEX, typesize, ierr);C_kb_size =dble(typesize)/1024d0
+    call MPI_Type_size(MPI_DOUBLE_PRECISION,typesize,ierr);D_kb_size =dble(typesize)/1024d0
+    call MPI_Type_size(MPI_INTEGER, typesize, ierr)       ;I_kb_size =dble(typesize)/1024d0
 #ifdef _CMPLX
     DATA_kb_size=C_kb_size
 #else
