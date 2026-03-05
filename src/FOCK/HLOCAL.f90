@@ -77,7 +77,11 @@ contains
     integer :: DimUps(1),DimDws(1)
     integer :: Nups(1),Ndws(1)
     integer :: isector,dim,isz,in
+    logical :: master=.true.
     !
+#ifdef _MPI
+    if(check_MPI())master  = get_master_MPI()
+#endif
     Ns       = Norb
     Ns_Orb   = Ns
     Ns_Ud    = 1
@@ -95,13 +99,16 @@ contains
        Nsectors = 2*Ns_orb+1    !n=0:2*Ns=2*Ns+1                 
     end select
     !
-    write(*,"(A)")"Init Local Fock space:"
-    write(*,"(A,I15)") '# of levels           = ',Ns
-    write(*,"(A,2I15)")'Hilbert dim per spin  = ',Nfocks
-    write(*,"(A,I15)") 'Fock space dimension  = ',Nfock
-    write(*,"(A,I15)") 'Number of sectors     = ',Nsectors
-    write(*,"(A)")"--------------------------------------------"
-    write(LOGfile,"(A)") bg_red('Warning: DIAGONAL HAMILTONIAN OPERATORS only')
+
+    if(master)then
+       write(*,"(A)")"Init Local Fock space:"
+       write(*,"(A,I15)") '# of levels           = ',Ns
+       write(*,"(A,2I15)")'Hilbert dim per spin  = ',Nfocks
+       write(*,"(A,I15)") 'Fock space dimension  = ',Nfock
+       write(*,"(A,I15)") 'Number of sectors     = ',Nsectors
+       write(*,"(A)")"--------------------------------------------"
+       write(LOGfile,"(A)") bg_red('Warning: DIAGONAL HAMILTONIAN OPERATORS only')
+    endif
     !
     !Allocate some indexing arrays
     allocate(getDim(Nsectors)) ;getDim=0
@@ -141,7 +148,7 @@ contains
     end select
     !
     !
-    call Write_FockStates()
+    if(master)call Write_FockStates()
     !
     return
   end subroutine Init_LocalFock_Space
