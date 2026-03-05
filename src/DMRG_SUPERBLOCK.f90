@@ -8,6 +8,7 @@ MODULE DMRG_SUPERBLOCK
 
 
   public :: sb_get_states
+  public :: sb_get_shares
   public :: sb_diag
 
   public :: sb_build_Hv
@@ -147,6 +148,7 @@ contains
     !
     if(MpiMaster)call stop_timer("Build SB states")
     t_sb_get_states=t_stop()
+    !
   end subroutine sb_get_states
 
 
@@ -162,6 +164,33 @@ contains
   end subroutine sb_del_states
 
 
+
+
+
+  subroutine sb_get_shares()
+    integer :: unit,q
+    call sb_build_dims()
+    if(MpiMaster)then
+       unit=fopen("sb_shares_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+       write(unit,*)"# STEP:",left%length
+       do q=1,size(sb_sector)
+#ifdef _MPI
+          if(MpiStatus)then
+             write(unit,*)q,mpiDls(q)*Drs(q),mpiDls(q),Drs(q)
+          else
+             write(unit,*)q,Dls(q)*Drs(q),Dls(q),Drs(q)
+          endif
+#else
+          write(unit,*)q,Dls(q)*Drs(q),Dls(q),Drs(q)
+#endif
+       enddo
+       write(unit,*)""
+       flush(unit)
+       close(unit)
+    endif
+    call Barrier_MPI(MpiComm)
+    call sb_delete_dims()
+  end subroutine sb_get_shares
 
 
   !-----------------------------------------------------------------!
@@ -253,13 +282,13 @@ contains
 #endif
        if(MpiMaster)call stop_timer("Diag H_sb")
        t_sb_diag=t_stop()
-!        allocate(gs_tmp,mold=gs_vector)
-!        call spHtimesV_p(vecDim,gs_vector(:,1),gs_tmp(:,1))
-!        EH = dot_product(gs_vector(:,1),  gs_tmp(:,1))
-! #ifdef _MPI
-!        if(MpiStatus)call Bcast_MPI(MpiComm,EH)
-! #endif
-!        write(200,*)current_L,EH/current_L
+       !        allocate(gs_tmp,mold=gs_vector)
+       !        call spHtimesV_p(vecDim,gs_vector(:,1),gs_tmp(:,1))
+       !        EH = dot_product(gs_vector(:,1),  gs_tmp(:,1))
+       ! #ifdef _MPI
+       !        if(MpiStatus)call Bcast_MPI(MpiComm,EH)
+       ! #endif
+       !        write(200,*)current_L,EH/current_L
        !
     else !use LAPACK
        !

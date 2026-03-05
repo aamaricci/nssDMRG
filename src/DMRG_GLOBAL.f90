@@ -371,25 +371,6 @@ contains
        enddo
        write(unit,*)""
        close(unit)
-       !
-       if(MpiMaster)then
-          call sb_build_dims()
-          unit=fopen("sb_shares_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
-          write(unit,*)"# STEP:",left%length
-          do q=1,size(sb_sector)
-#ifdef _MPI
-             if(MpiStatus)then
-                write(unit,*)q,mpiDls(q)*Drs(q),mpiDls(q),Drs(q)
-             else
-                write(unit,*)q,Dls(q)*Drs(q),Dls(q),Drs(q)
-             endif
-#else
-             write(unit,*)q,Dls(q)*Drs(q),Dls(q),Drs(q)
-#endif
-          enddo
-          write(unit,*)""
-          close(unit)
-       endif
     endif
 #endif
     call reset_profile()
@@ -410,6 +391,9 @@ contains
 
 
 
+
+  
+  
 
   subroutine sb_build_dims()
     integer                          :: Nsb

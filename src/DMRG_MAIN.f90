@@ -338,6 +338,7 @@ contains
     !
     !In DMRG_SUPERBLOCK:
     call sb_get_states()
+    call sb_get_shares()
     m_sb = size(sb_states)
     rdcd_sb_dim=m_sb
     full_sb_dim=m_eleft*m_eright
