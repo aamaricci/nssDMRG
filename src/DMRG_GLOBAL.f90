@@ -199,7 +199,6 @@ MODULE DMRG_GLOBAL
   integer,allocatable,dimension(:)               :: mpiDrs
   integer,allocatable,dimension(:)               :: mpiDl,mpiDr
   integer,allocatable,dimension(:)               :: mpiOffset
-  integer                                        :: mpiL=0,mpiR=0
 
 
 

@@ -231,7 +231,7 @@ contains
     !
     if(MpiMaster)t0=t_start()
     !Main computation:
-    do isb=1,Nsb
+    do isb=1,Nsb 
        qn             = sb_sector%qn(index=isb)
        AI(isb)%states = sb2block_states(qn,'left')
        BI(isb)%states = sb2block_states(qn,'right')
@@ -870,7 +870,7 @@ contains
 
 
 
-
+  
 
 
 
@@ -898,7 +898,7 @@ contains
     real(8)                               :: aval,bval
     real(8),dimension(:,:),allocatable    :: C,Ct
 #endif
-    integer                               :: i,j,k,q,n
+    integer                               :: i,j,k,q,n,shift
     integer                               :: ir,il,jr,jl,it
     integer                               :: ai,aj,bi,bj,jcol
     integer                               :: ia,ib,ic,ja,jb,jc
@@ -962,7 +962,7 @@ contains
        !Hv = (A.x.B)vec(V) --> (A.x.B).V  -> vec(B.V.A^T)
        !
        !  B.V.A^T : [B.Nrow,B.Ncol].[B.Ncol,A.Ncol].[A.Ncol,A.Nrow]
-       !            [Dr(k),Dr(k')].[Dr(k'),Dl(k')].[Dl(k'),Dl(k)]
+       !            [Dr(k),Dr(k')].[Dr(k'),mpiDl(k')].[mpiDl(k'),Dl(k)]
        !   C.A^T  : [B.Nrow,A.Ncol].[A.Ncol,A.Nrow]
        !(A.C^T)^T : [ [A.Nrow,A.Ncol].[A.Ncol,B.Nrow] ]^T
        !              [B.Nrow,A.Nrow] = vec(Hv)
@@ -987,6 +987,9 @@ contains
           mpiBrow = mpiDrs(k)
           if(isHconjg(it,k)==1)mpiBrow=mpiDrs(q)
           !
+          shift = mpiOffset(q)
+          if(isHconjg(it,k)==1)shift = mpiOffset(k)
+          !
           allocate(C(B(it,k)%Nrow,mpiAcol));C=zero
           !
           t0=t_start()
@@ -999,8 +1002,7 @@ contains
                    bj   = B(it,k)%row(bi)%cols(jb)
                    val  = B(it,k)%row(bi)%vals(jb)
                    jc   = bj + (aj-1)*B(it,k)%Ncol
-                   j    = jc + mpiOffset(q)
-                   if(isHconjg(it,k)==1)j = jc + mpiOffset(k)
+                   j    = jc + shift
                    C(bi,aj) = C(bi,aj) + val*v(j)
                 enddo
                 !
