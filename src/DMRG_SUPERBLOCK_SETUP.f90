@@ -27,7 +27,7 @@ MODULE DMRG_SUPERBLOCK_SETUP
   !
 contains
 
-
+	
 
 
   
@@ -201,7 +201,6 @@ contains
     enddo
     !
     !
-    call sb_build_dims()
     allocate(RowOffset(tNso,Nsb))
     allocate(ColOffset(tNso,Nsb))
     RowOffset=0
@@ -475,7 +474,6 @@ contains
     enddo
     !
     !
-    call sb_build_dims()
     allocate(RowOffset(tNso,Nsb))
     allocate(ColOffset(tNso,Nsb))
     RowOffset=0
@@ -903,161 +901,164 @@ contains
     integer                               :: ai,aj,bi,bj,jcol
     integer                               :: ia,ib,ic,ja,jb,jc
     integer                               :: mpiArow,mpiAcol,mpiBrow,mpiBcol
-    integer                               :: i_start,i_end
+    integer                               :: i_start,i_end, abcomm
     !
     if(.not.MpiStatus)stop "spMatVec_mpi_normal_main ERROR: MpiStatus = F"
     !
     !
-
+      
     Hv=zero
     t0=t_start()
     !> loop over all the SB sectors: k
     sector: do k=1,size(sb_sector)
-       !
-       !> apply the 1^L x H^r: share L columns
-       t0=t_start()
-       do il=1,mpiDls(k)   !Fix the column il(q): v_il(q) for each thread
-          !
-          do ir=1,Drs(k)   !H^r.v_il
-             i = ir + (il-1)*Drs(k) + mpiOffset(k)
-             do jcol=1,Hright(k)%row(ir)%Size
-                val = Hright(k)%row(ir)%vals(jcol)
-                jr  = Hright(k)%row(ir)%cols(jcol)
-                j   = jr + (il-1)*Drs(k) + mpiOffset(k)
-                Hv(i) = Hv(i) + val*v(j)
-             end do
+      !
+      !> apply the 1^L x H^r: share L columns
+      t0=t_start()
+      do il=1,mpiDls(k)   !Fix the column il(q): v_il(q) for each thread
+        !
+        do ir=1,Drs(k)   !H^r.v_il
+          i = ir + (il-1)*Drs(k) + mpiOffset(k)
+          do jcol=1,Hright(k)%row(ir)%Size
+            val = Hright(k)%row(ir)%vals(jcol)
+            jr  = Hright(k)%row(ir)%cols(jcol)
+            j   = jr + (il-1)*Drs(k) + mpiOffset(k)
+            Hv(i) = Hv(i) + val*v(j)
+          end do
+        enddo
+        !
+      enddo
+      t_hxv_1LxHR=t_hxv_1LxHR+t_stop()
+      !       
+      !> apply the H^L x 1^r
+      !L part: non-contiguous in memory -> MPI transposition
+      t0=t_start()
+      allocate(vt(mpiDrs(k)*Dls(k))) ;vt=zero
+      allocate(Hvt(mpiDrs(k)*Dls(k)));Hvt=zero
+      i_start = 1 + mpiOffset(k)
+      i_end   = Drs(k)*mpiDls(k)+mpiOffSet(k)
+      call vector_transpose_MPI(Drs(k),mpiDls(k),v(i_start:i_end),Dls(k),mpiDrs(k),vt,mpiSBCOMM(k))
+      do il=1,mpiDrs(k)  !Fix the *column* ir: v_ir(q). Transposed order
+        !
+        do ir=1,Dls(k)  !go row-by-row H^l.v_ir: Transposed order
+          i = ir + (il-1)*Dls(k)
+          do jcol=1,Hleft(k)%row(ir)%Size
+            val = Hleft(k)%row(ir)%vals(jcol)
+            jr  = Hleft(k)%row(ir)%cols(jcol)
+            j   = jr + (il-1)*Dls(k)
+            Hvt(i) = Hvt(i) + val*vt(j)
+          end do
+        enddo
+        !
+      enddo
+      deallocate(vt) ; allocate(vt(Drs(k)*mpiDls(k))) ; vt=zero
+      call vector_transpose_MPI(Dls(k),mpiDrs(k),Hvt,Drs(k),mpiDls(k),vt,mpiSBCOMM(k))
+      Hv(i_start:i_end) = Hv(i_start:i_end) + Vt
+      deallocate(vt,Hvt)
+      t_hxv_HLx1R=t_hxv_HLx1R+t_stop()
+      !
+      !> apply the term sum_k sum_it A_it(k).x.B_it(k)
+      !Hv = (A.x.B)vec(V) --> (A.x.B).V  -> vec(B.V.A^T)
+      !
+      !  B.V.A^T : [B.Nrow,B.Ncol].[B.Ncol,A.Ncol].[A.Ncol,A.Nrow]
+      !            [Dr(k),Dr(k')].[Dr(k'),mpiDl(k')].[mpiDl(k'),Dl(k)]
+      !   C.A^T  : [B.Nrow,A.Ncol].[A.Ncol,A.Nrow]
+      !(A.C^T)^T : [ [A.Nrow,A.Ncol].[A.Ncol,B.Nrow] ]^T
+      !              [B.Nrow,A.Nrow] = vec(Hv)
+      !
+      t0=t_start()
+      do it=1,tNso
+        if(.not.A(it,k)%status.OR..not.B(it,k)%status)cycle
+        !
+        q = isb2jsb(it,k)
+        !
+        !1. evaluate MMP: C = B.vec(V)
+        !   \sum_bcol B(bi,bj)V_q(bj,aj)=C(bi,aj)
+        !   j = bj+(aj-1)B.Ncol + ColOffset_q
+        !   \sum_bcol B(bi,bj)v_q(j)=C(bi,aj)
+        !
+        mpiAcol = mpiDls(q)
+        if(isHconjg(it,k)==1)mpiAcol=mpiDls(k)
+        !
+        mpiArow = mpiDls(k)
+        if(isHconjg(it,k)==1)mpiArow=mpiDls(q)
+        !
+        mpiBrow = mpiDrs(k)
+        if(isHconjg(it,k)==1)mpiBrow=mpiDrs(q)
+        !
+        shift = mpiOffset(q)
+        if(isHconjg(it,k)==1)shift = mpiOffset(k)
+        !           
+        allocate(C(B(it,k)%Nrow,mpiAcol));C=zero
+        t0=t_start()
+        do aj=1,mpiAcol
+          do bi=1,B(it,k)%Nrow
+            if(B(it,k)%row(bi)%Size==0)cycle
+            do jb=1,B(it,k)%row(bi)%Size
+              bj   = B(it,k)%row(bi)%cols(jb)
+              val  = B(it,k)%row(bi)%vals(jb)
+              jc   = bj + (aj-1)*B(it,k)%Ncol
+              j    = jc + shift
+              C(bi,aj) = C(bi,aj) + val*v(j)
+            enddo
           enddo
+        enddo
+        t_hxv_B=t_hxv_B+t_stop()
+        !
+        !Up to here we built "few", thread-related, columns of C(b,j*)
+        !In the next step we will need to get [A.C^T]^T
+        ! [C(b,j*)]^T = C(j*,b)
+        ! [sum_j A_ij.[C^t]_jb]^T
+        !
+        !2. evaluate MMP: C.A^t
+        !   \sum_aj C(bi,aj)A^t(aj,ai)
+        !  =\sum_aj [A(ai,aj)C^t(aj,bi)]^T
+        ! = [Hvt[A.Nrow,mpiBrow]]^T
+        ! => Hv[B.Nrow,mpiArow]
+        !        
+        !
+        !use mpiSBCOMM(q) if mpiNactive(q)>mpiNactive(k) and mpiSBCOMM(k) otherwise
+        if(mpiNactive(q)>mpiNactive(k))then
+           abcomm = mpiSBCOMM(q)
+        else
+           abcomm = mpiSBCOMM(k)
+        endif
+        allocate(Ct(A(it,k)%Ncol,mpiBrow));Ct=zero
+        call vector_transpose_MPI(B(it,k)%Nrow,mpiAcol,C,A(it,k)%Ncol,mpiBrow,Ct,abcomm)
+        !
+        allocate(vt(mpiArow*B(it,k)%Nrow)) ; vt=zero
+        allocate(Hvt(A(it,k)%Nrow*mpiBrow));Hvt=zero
+        !
+        t0=t_start()
+        do bi=1,mpiBrow
           !
-       enddo
-       t_hxv_1LxHR=t_hxv_1LxHR+t_stop()
-       !       
-       !> apply the H^L x 1^r
-       !L part: non-contiguous in memory -> MPI transposition
-       t0=t_start()
-       allocate(vt(mpiDrs(k)*Dls(k))) ;vt=zero
-       allocate(Hvt(mpiDrs(k)*Dls(k)));Hvt=zero
-       i_start = 1 + mpiOffset(k)
-       i_end   = Drs(k)*mpiDls(k)+mpiOffSet(k)
-       call vector_transpose_MPI(Drs(k),mpiDls(k),v(i_start:i_end),Dls(k),mpiDrs(k),vt)
-       do il=1,mpiDrs(k)  !Fix the *column* ir: v_ir(q). Transposed order
-          !
-          do ir=1,Dls(k)  !go row-by-row H^l.v_ir: Transposed order
-             i = ir + (il-1)*Dls(k)
-             do jcol=1,Hleft(k)%row(ir)%Size
-                val = Hleft(k)%row(ir)%vals(jcol)
-                jr  = Hleft(k)%row(ir)%cols(jcol)
-                j   = jr + (il-1)*Dls(k)
-                Hvt(i) = Hvt(i) + val*vt(j)
-             end do
+          do ai=1,A(it,k)%Nrow
+            if(A(it,k)%row(ai)%Size==0)cycle
+            i  =  ai + (bi-1)*A(it,k)%Nrow
+            !
+            do ja=1,A(it,k)%row(ai)%Size
+              aj  = A(it,k)%row(ai)%cols(ja)
+              val = A(it,k)%row(ai)%vals(ja)
+              Hvt(i) = Hvt(i) + val*Ct(aj,bi)
+            enddo
+            !
           enddo
-          !
-       enddo
-       deallocate(vt) ; allocate(vt(Drs(k)*mpiDls(k))) ; vt=zero
-       call vector_transpose_MPI(Dls(k),mpiDrs(k),Hvt,Drs(k),mpiDls(k),vt)
-       Hv(i_start:i_end) = Hv(i_start:i_end) + Vt
-       deallocate(vt,Hvt)
-       t_hxv_HLx1R=t_hxv_HLx1R+t_stop()
-       !
-       !> apply the term sum_k sum_it A_it(k).x.B_it(k)
-       !Hv = (A.x.B)vec(V) --> (A.x.B).V  -> vec(B.V.A^T)
-       !
-       !  B.V.A^T : [B.Nrow,B.Ncol].[B.Ncol,A.Ncol].[A.Ncol,A.Nrow]
-       !            [Dr(k),Dr(k')].[Dr(k'),mpiDl(k')].[mpiDl(k'),Dl(k)]
-       !   C.A^T  : [B.Nrow,A.Ncol].[A.Ncol,A.Nrow]
-       !(A.C^T)^T : [ [A.Nrow,A.Ncol].[A.Ncol,B.Nrow] ]^T
-       !              [B.Nrow,A.Nrow] = vec(Hv)
-       !
-       t0=t_start()
-       do it=1,tNso
-          if(.not.A(it,k)%status.OR..not.B(it,k)%status)cycle
-          !
-          q = isb2jsb(it,k)
-          !
-          !1. evaluate MMP: C = B.vec(V)
-          !   \sum_bcol B(bi,bj)V_q(bj,aj)=C(bi,aj)
-          !   j = bj+(aj-1)B.Ncol + ColOffset_q
-          !   \sum_bcol B(bi,bj)v_q(j)=C(bi,aj)
-          !
-          mpiAcol = mpiDls(q)
-          if(isHconjg(it,k)==1)mpiAcol=mpiDls(k)
-          !
-          mpiArow = mpiDls(k)
-          if(isHconjg(it,k)==1)mpiArow=mpiDls(q)
-          !
-          mpiBrow = mpiDrs(k)
-          if(isHconjg(it,k)==1)mpiBrow=mpiDrs(q)
-          !
-          shift = mpiOffset(q)
-          if(isHconjg(it,k)==1)shift = mpiOffset(k)
-          !
-          allocate(C(B(it,k)%Nrow,mpiAcol));C=zero
-          !
-          t0=t_start()
-          do aj=1,mpiAcol
-             !
-             do bi=1,B(it,k)%Nrow
-                if(B(it,k)%row(bi)%Size==0)cycle
-                !
-                do jb=1,B(it,k)%row(bi)%Size
-                   bj   = B(it,k)%row(bi)%cols(jb)
-                   val  = B(it,k)%row(bi)%vals(jb)
-                   jc   = bj + (aj-1)*B(it,k)%Ncol
-                   j    = jc + shift
-                   C(bi,aj) = C(bi,aj) + val*v(j)
-                enddo
-                !
-             enddo
-          enddo
-          t_hxv_B=t_hxv_B+t_stop()
-          !
-          !Up to here we built "few", thread-related, columns of C(b,j*)
-          !In the next step we will need to get [A.C^T]^T
-          ! [C(b,j*)]^T = C(j*,b)
-          ! [sum_j A_ij.[C^t]_jb]^T
-          !
-          !2. evaluate MMP: C.A^t
-          !   \sum_aj C(bi,aj)A^t(aj,ai)
-          !  =\sum_aj [A(ai,aj)C^t(aj,bi)]^T
-          ! = [Hvt[A.Nrow,mpiBrow]]^T
-          ! => Hv[B.Nrow,mpiArow]
-          !
-          allocate(Ct(A(it,k)%Ncol,mpiBrow));Ct=zero
-          call vector_transpose_MPI(B(it,k)%Nrow,mpiAcol,C,A(it,k)%Ncol,mpiBrow,Ct)
-          !
-          allocate(vt(mpiArow*B(it,k)%Nrow)) ; vt=zero
-          allocate(Hvt(A(it,k)%Nrow*mpiBrow));Hvt=zero
-          !
-          t0=t_start()
-          do bi=1,mpiBrow
-             !
-             do ai=1,A(it,k)%Nrow
-                if(A(it,k)%row(ai)%Size==0)cycle
-                i  =  ai + (bi-1)*A(it,k)%Nrow
-                !
-                do ja=1,A(it,k)%row(ai)%Size
-                   aj  = A(it,k)%row(ai)%cols(ja)
-                   val = A(it,k)%row(ai)%vals(ja)
-                   Hvt(i) = Hvt(i) + val*Ct(aj,bi)
-                enddo
-                !
-             enddo
-          enddo
-          t_hxv_A=t_hxv_A+t_stop()
-          !
-          call vector_transpose_MPI(A(it,k)%Nrow,mpiBrow,Hvt,B(it,k)%Nrow,mpiArow,vt)
-          ! i_start = 1 + mpiRowOffset(it,k)
-          ! i_end   = B(it,k)%Nrow*mpiArow+mpiRowOffSet(it,k)
-          i_start = 1 + mpiOffset(k)
-          if(isHconjg(it,k)==1)i_start = 1 + mpiOffset(q)
-          i_end   = B(it,k)%Nrow*mpiArow+mpiOffSet(k)          
-          if(isHconjg(it,k)==1)i_end   = B(it,k)%Nrow*mpiArow+mpiOffSet(q)
-          !
-          Hv(i_start:i_end) = Hv(i_start:i_end) + Vt
-          !
-          deallocate(C,Ct,Hvt,Vt)
-       enddo
-       t_hxv_AxB=t_hxv_AxB+t_stop()
-       !
+        enddo
+        t_hxv_A=t_hxv_A+t_stop()
+        !
+        abcomm = mpiSBCOMM(k)
+        if(isHconjg(it,k)==1)abcomm = mpiSBCOMM(q) 
+        call vector_transpose_MPI(A(it,k)%Nrow,mpiBrow,Hvt,B(it,k)%Nrow,mpiArow,vt,abcomm)
+        i_start = 1 + mpiOffset(k)
+        if(isHconjg(it,k)==1)i_start = 1 + mpiOffset(q)
+        i_end   = B(it,k)%Nrow*mpiArow+mpiOffSet(k)          
+        if(isHconjg(it,k)==1)i_end   = B(it,k)%Nrow*mpiArow+mpiOffSet(q)
+        !
+        Hv(i_start:i_end) = Hv(i_start:i_end) + Vt
+        !
+        deallocate(C,Ct,Hvt,Vt)
+      enddo
+      t_hxv_AxB=t_hxv_AxB+t_stop()
+      !
     enddo sector
     t_hxv_direct=t_hxv_direct + t_stop()
   end subroutine spMatVec_MPI_direct_main

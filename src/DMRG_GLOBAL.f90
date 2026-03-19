@@ -62,6 +62,7 @@ MODULE DMRG_GLOBAL
   integer                                        :: current_L
   type(block)                                    :: init_left,init_right
   logical                                        :: init_called=.false.
+	logical                                       :: dims_set=.false.
 #ifdef _CMPLX
   complex(8),dimension(:,:),allocatable          :: gs_vector
 #else
@@ -199,8 +200,8 @@ MODULE DMRG_GLOBAL
   integer,allocatable,dimension(:)               :: mpiDrs
   integer,allocatable,dimension(:)               :: mpiDl,mpiDr
   integer,allocatable,dimension(:)               :: mpiOffset
-
-
+  integer,allocatable,dimension(:)               :: mpiSBCOMM ! sub-comu 
+  integer,allocatable,dimension(:)               :: mpiNactive ! number of active ranks in each sb sector
 
 
 
@@ -211,13 +212,13 @@ MODULE DMRG_GLOBAL
 
 #ifdef _MPI
   interface scatter_vector_MPI
-     module procedure                        :: scatter_vector_MPI_v1
-     module procedure                        :: scatter_vector_MPI_v2
+     module procedure  :: scatter_vector_MPI_v1
+     module procedure  :: scatter_vector_MPI_v2
   end interface scatter_vector_MPI
 
   interface gather_vector_MPI
-     module procedure :: gather_vector_MPI_v1
-     module procedure :: gather_vector_MPI_v2
+     module procedure  :: gather_vector_MPI_v1
+     module procedure  :: gather_vector_MPI_v2
   end interface gather_vector_MPI
 
   public :: scatter_vector_MPI
@@ -229,244 +230,12 @@ MODULE DMRG_GLOBAL
 contains
 
 
-
-  subroutine reset_profile()
-    !
-    t0                = 0d0
-    t1                = 0d0
-    t_a2av            = 0d0 !_GLOBAL
-    t_sctr            = 0d0 !_GLOBAL
-    t_gthr            = 0d0 !_GLOBAL
-    t_agthr           = 0d0 !_GLOBAL
-    t_dmrg_step       = 0d0 !_MAIN
-    t_enlarge_blocks  = 0d0 !_CONNECT
-    t_connect_blocks  = 0d0 !_CONNECT
-    t_sb_get_states   = 0d0 !_SUPERBLOCK
-    t_sb_diag         = 0d0 !_SUPERBLOCK
-    t_setup_sb_sparse = 0d0 !_SUPERBLOC_SETUP
-    t_setup_sb_direct = 0d0 !_SUPERBLOC_SETUP
-    t_hxv_direct      = 0d0 !_SUPERBLOC_SETUP
-    t_hxv_1LxHR       = 0d0 !_SUPERBLOC_SETUP
-    t_hxv_HLx1R       = 0d0 !_SUPERBLOC_SETUP
-    t_hxv_AxB         = 0d0 !_SUPERBLOC_SETUP
-    t_hxv_B           = 0d0 !_SUPERBLOC_SETUP
-    t_hxv_A           = 0d0 !_SUPERBLOC_SETUP
-    t_rdm_get         = 0d0 !_RDM
-    t_rdm_diag        = 0d0 !_RDM
-    t_rdm_renorm      = 0d0 !_RDM
-    kb_vecDim         = 0d0
-    kb_sent_a2av      = 0d0
-    kb_recv_a2av      = 0d0
-    kb_sent_sctr      = 0d0
-    kb_recv_sctr      = 0d0
-    kb_sent_gthr      = 0d0
-    kb_recv_gthr      = 0d0    
-    kb_sent_agthr     = 0d0
-    kb_recv_agthr     = 0d0
-    kb_agthr_sb_states= 0d0
-    kb_sb_setup_bcast = 0d0
-    !
-    if(allocated(prof_times))deallocate(prof_times)
-    if(allocated(prof_names))deallocate(prof_names)
-  end subroutine reset_profile
-
-
-
-
-
-  subroutine set_profile
-    integer :: unit,i,Ierr,q
-#ifdef _PROFILE
-#ifdef _MPI
-    if(MpiStatus)then
-       call Sum_MPI(MpiComm,kb_vecDim)
-       kb_vecDim=kb_vecDim/MpiSize
-       !
-       call Max_MPI(MpiComm,t_enlarge_blocks)
-       !
-       call Max_MPI(MpiComm,t_sb_get_states)
-       call Sum_MPI(MpiComm,kb_agthr_sb_states)
-       !
-       call Max_MPI(MpiComm,t_sb_diag)
-       call Max_MPI(MpiComm,t_sctr)
-       call Sum_MPI(MpiComm,kb_sent_sctr)
-       call Sum_MPI(MpiComm,kb_recv_sctr)
-       !
-       call Max_MPI(MpiComm,t_setup_sb_sparse)
-       call Max_MPI(MpiComm,t_hxv_sparse)
-       !
-       call Max_MPI(MpiComm,t_setup_sb_direct)
-       call Sum_MPI(MpiComm,kb_sb_setup_bcast)
-       !
-       call Max_MPI(MpiComm,t_hxv_direct)
-       call Max_MPI(MpiComm,t_hxv_1LxHR)
-       call Max_MPI(MpiComm,t_hxv_HLx1R)
-       call Max_MPI(MpiComm,t_hxv_AxB)
-       call Max_MPI(MpiComm,t_hxv_B)
-       call Max_MPI(MpiComm,t_hxv_A)
-       !
-
-       call Max_MPI(MpiComm,t_a2av)
-       call Sum_MPI(MpiComm,kb_sent_a2av)
-       call Sum_MPI(MpiComm,kb_recv_a2av)
-       !
-       call Max_MPI(MpiComm,t_rdm_get)
-       call Max_MPI(MpiComm,t_gthr)
-       call Sum_MPI(MpiComm,kb_sent_gthr)
-       call Sum_MPI(MpiComm,kb_recv_gthr)
-       !
-       call Max_MPI(MpiComm,t_rdm_diag)
-       call Max_MPI(MpiComm,t_rdm_renorm)
-       !
-       call Max_MPI(MpiComm,t_dmrg_step)
-    endif
-#endif
-    !
-    call append_profile("total_length_sb",dble(left%length + right%length))
-    call append_profile("reduced_sb_dim",rdcd_sb_dim)
-    call append_profile("kb_vecDim_av",kb_vecDim)
-    call append_profile("full_sb_dim",full_sb_dim)
-    call append_profile("time_enlarge_blocks",t_enlarge_blocks) !>= t_connect_blocks
-    !
-    call append_profile("time_sb_get_states",t_sb_get_states)
-    call append_profile("kb_agthr_sb_states",kb_agthr_sb_states)
-    !
-    call append_profile("time_sb_diag",t_sb_diag)
-    call append_profile("kb_sent_sctr",kb_sent_sctr)
-    call append_profile("kb_recv_sctr",kb_recv_sctr)
-    !
-    call append_profile("time_setup_sb_sparse",t_setup_sb_sparse) !>= t_connect_blocks
-    call append_profile("time_hxv_sparse",t_hxv_sparse)
-    !
-    call append_profile("time_setup_sb_direct",t_setup_sb_direct)
-    call append_profile("kb_sb_setup_bcast",kb_sb_setup_bcast)    
-    !
-    call append_profile("time_hxv_direct",t_hxv_direct)
-    call append_profile("time_hxv_1LxHR",t_hxv_1LxHR)
-    call append_profile("time_hxv_HLx1R",t_hxv_HLx1R)
-    call append_profile("time_hxv_AxB",t_hxv_AxB)
-    call append_profile("time_hxv_B",t_hxv_B)
-    call append_profile("time_hxv_A",t_hxv_A)
-    !
-    call append_profile("time_a2av",t_a2av)
-    call append_profile("kb_sent_a2av",kb_sent_a2av)
-    call append_profile("kb_recv_a2av",kb_recv_a2av)
-    !
-    call append_profile("HxV_Nop",dble(NumOp))
-    !
-    call append_profile("time_rdm_get",t_rdm_get)
-    call append_profile("kb_sent_gthr",kb_sent_gthr)
-    call append_profile("kb_recv_gthr",kb_recv_gthr)
-    call append_profile("time_rdm_diag",t_rdm_diag)
-    call append_profile("time_rdm_renorm",t_rdm_renorm)
-    !
-    call append_profile("time_dmrg_step",t_dmrg_step)
-    !
-    if(MpiMaster)then
-       unit=fopen("full_profile_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
-       write(unit,*)"# STEP:",left%length
-       do i=1,size(prof_times)
-          write(unit,*)prof_names(i),prof_times(i)
-       enddo
-       write(unit,*)""
-       close(unit)
-    endif
-#endif
-    call reset_profile()
-    !
-  end subroutine set_profile
-
-
-
-
-
-
-  subroutine append_profile(string,time)
-    character(len=*) :: string
-    real(8)          :: time
-    if(MpiMaster)call append(prof_names,string)
-    if(MpiMaster)call append(prof_times,time)
-  end subroutine append_profile
-
+  
 
 
 
   
   
-
-  subroutine sb_build_dims()
-    integer                          :: Nsb
-    integer                          :: isb
-    real(8),dimension(:),allocatable :: qn
-    !
-    Nsb  = size(sb_sector)
-    if(Nsb==0)stop "sb_build_dims error: size(sb_sector)==0"
-    !
-    call sb_delete_dims()
-    !
-    allocate(Dls(Nsb))
-    allocate(Drs(Nsb))
-    allocate(Offset(Nsb))
-#ifdef _MPI
-    allocate(mpiDls(Nsb))
-    allocate(mpiDrs(Nsb))
-    allocate(mpiDl(Nsb))
-    allocate(mpiDr(Nsb))
-    allocate(mpiOffset(Nsb))
-    mpiOffset=0
-#endif
-    !
-    Offset=0
-    do isb=1,Nsb
-       qn      = sb_sector%qn(index=isb)
-       Dls(isb)= sector_qn_dim(left%sectors(1),qn)
-       Drs(isb)= sector_qn_dim(right%sectors(1),current_target_qn - qn)
-       Offset(isb)=sum(Dls(1:isb-1)*Drs(1:isb-1))
-       !
-#ifdef _MPI
-       ! MPI VARS SETUP 
-       mpiDls(isb) = Dls(isb)/MpiSize
-       mpiDrs(isb) = Drs(isb)/MpiSize
-       if(MpiRank < mod(Dls(isb),MpiSize))mpiDls(isb) = mpiDls(isb)+1
-       if(MpiRank < mod(Drs(isb),MpiSize))mpiDrs(isb) = mpiDrs(isb)+1
-       mpiDl(isb) = Drs(isb)*mpiDls(isb)
-       mpiDr(isb) = mpiDrs(isb)*Dls(isb)
-       !
-       mpiOffset(isb)=sum(Drs(1:isb-1)*mpiDls(1:isb-1))
-#endif
-    enddo
-    !
-  end subroutine sb_build_dims
-
-
-
-
-  subroutine sb_delete_dims
-    if(allocated(Dls))deallocate(Dls)
-    if(allocated(Drs))deallocate(Drs)
-    if(allocated(Offset))deallocate(Offset)   
-#ifdef _MPI
-    if(allocated(mpiDls))deallocate(mpiDls)
-    if(allocated(mpiDrs))deallocate(mpiDrs)
-    if(allocated(mpiDl))deallocate(mpiDl)
-    if(allocated(mpiDr))deallocate(mpiDr)
-    if(allocated(mpiOffset))deallocate(mpiOffset)
-#endif
-  end subroutine sb_delete_dims
-
-
-
-
-  subroutine sb_set_current_qn()
-    current_L         = left%length + right%length
-    select case(str(to_lower(QNtype(1:1))))
-    case default;stop "DMRG_MAIN error: QNtype != [local,global]"
-    case("l")
-       current_target_QN = int(target_qn*current_L*Norb)
-    case("g")
-       current_target_QN = min(current_L,int(target_qn*Norb)) !to check
-    end select
-  end subroutine sb_set_current_qn
 
 
 
@@ -475,7 +244,6 @@ contains
   !                   MPI AUX FUNCTIONS
   !##################################################################
   !##################################################################
-
   subroutine dmrg_set_MpiComm()
 #ifdef _MPI
     integer :: ierr
@@ -530,12 +298,13 @@ contains
   !               ALL-2-ALL-V VECTOR MPI TRANSPOSITION 
   !####################################################################
 #ifdef _MPI
-  subroutine vector_transpose_MPI(nrow,qcol,a,ncol,qrow,b)
+  subroutine vector_transpose_MPI(nrow,qcol,a,ncol,qrow,b,sub_comm)
     !
     integer                             :: nrow !Global number of rows 
     integer                             :: ncol !Global number of columns
     integer                             :: qrow !Local number of rows on each thread
     integer                             :: qcol !Local number of columns on each thread
+    integer                             :: sub_comm !Sub-communicator for active ranks
 #ifdef _CMPLX    
     complex(8)                          :: a(nrow,qcol) ! Input vector to be transposed
     complex(8)                          :: b(ncol,qrow) ! Output vector :math:`b = v^T`
@@ -550,6 +319,10 @@ contains
     integer                             :: counts,Ntot
     integer                             :: i,j,irank,ierr
     !
+    !if (sub_comm == MPI_COMM_NULL) return
+	!
+		!
+		!Round robin distribution of columns: hardcoded for now, can be easily changed to block distribution if needed	
     counts = Nrow/MpiSize
     Ntot   = Ncol/MpiSize
     if(mod(Ncol,MpiSize)/=0)Ntot=Ntot+1
@@ -559,6 +332,8 @@ contains
     allocate(recv_counts(0:MpiSize-1,Ntot));recv_counts=0
     allocate(recv_offset(0:MpiSize-1,Ntot));recv_offset=0
     !
+	 !Round robin distribution of rows: hardcoded for now, can be easily changed to block distribution if needed
+
     do i=1,qcol
        do irank=0,MpiSize-1
           if(irank < mod(Nrow,MpiSize))then
@@ -573,7 +348,7 @@ contains
        call MPI_AllToAll(&
             send_counts(0:,i),1,MPI_INTEGER,&
             recv_counts(0:,i),1,MPI_INTEGER,&
-            MpiComm,ierr)
+            MpiComm,ierr) !not sure if this is the right communicator to use here, but it should be fine since only active ranks have non-zero counts
     enddo
     !
     do i=1,Ntot
@@ -608,12 +383,12 @@ contains
        call MPI_AllToAllV(& ! A(:,j),send_counts(:,j),send_offset(:,j),MPI_DOUBLE_PRECISION,&
             Vtmp,send_counts(:,j),send_offset(:,j),MPI_DOUBLE_COMPLEX,&
             B(:,:),recv_counts(:,j),recv_offset(:,j),MPI_DOUBLE_COMPLEX,&
-            MpiComm,ierr)
+            sub_comm,ierr)
 #else
        call MPI_AllToAllV(& ! A(:,j),send_counts(:,j),send_offset(:,j),MPI_DOUBLE_PRECISION,&
             Vtmp,send_counts(:,j),send_offset(:,j),MPI_DOUBLE_PRECISION,&
             B(:,:),recv_counts(:,j),recv_offset(:,j),MPI_DOUBLE_PRECISION,&
-            MpiComm,ierr)
+            sub_comm,ierr)
 #endif
        deallocate(Vtmp)
     enddo
@@ -938,9 +713,179 @@ contains
 
 
 
+  !##################################################################
+  !##################################################################
+  !                   PROFILE AUX FUNCTIONS
+  !##################################################################
+  !##################################################################
+  subroutine reset_profile()
+    !
+    t0                = 0d0
+    t1                = 0d0
+    t_a2av            = 0d0 !_GLOBAL
+    t_sctr            = 0d0 !_GLOBAL
+    t_gthr            = 0d0 !_GLOBAL
+    t_agthr           = 0d0 !_GLOBAL
+    t_dmrg_step       = 0d0 !_MAIN
+    t_enlarge_blocks  = 0d0 !_CONNECT
+    t_connect_blocks  = 0d0 !_CONNECT
+    t_sb_get_states   = 0d0 !_SUPERBLOCK
+    t_sb_diag         = 0d0 !_SUPERBLOCK
+    t_setup_sb_sparse = 0d0 !_SUPERBLOC_SETUP
+    t_setup_sb_direct = 0d0 !_SUPERBLOC_SETUP
+    t_hxv_direct      = 0d0 !_SUPERBLOC_SETUP
+    t_hxv_1LxHR       = 0d0 !_SUPERBLOC_SETUP
+    t_hxv_HLx1R       = 0d0 !_SUPERBLOC_SETUP
+    t_hxv_AxB         = 0d0 !_SUPERBLOC_SETUP
+    t_hxv_B           = 0d0 !_SUPERBLOC_SETUP
+    t_hxv_A           = 0d0 !_SUPERBLOC_SETUP
+    t_rdm_get         = 0d0 !_RDM
+    t_rdm_diag        = 0d0 !_RDM
+    t_rdm_renorm      = 0d0 !_RDM
+    kb_vecDim         = 0d0
+    kb_sent_a2av      = 0d0
+    kb_recv_a2av      = 0d0
+    kb_sent_sctr      = 0d0
+    kb_recv_sctr      = 0d0
+    kb_sent_gthr      = 0d0
+    kb_recv_gthr      = 0d0    
+    kb_sent_agthr     = 0d0
+    kb_recv_agthr     = 0d0
+    kb_agthr_sb_states= 0d0
+    kb_sb_setup_bcast = 0d0
+    !
+    if(allocated(prof_times))deallocate(prof_times)
+    if(allocated(prof_names))deallocate(prof_names)
+  end subroutine reset_profile
 
 
 
+
+
+  subroutine set_profile
+    integer :: unit,i,Ierr,q
+#ifdef _PROFILE
+#ifdef _MPI
+    if(MpiStatus)then
+       call Sum_MPI(MpiComm,kb_vecDim)
+       kb_vecDim=kb_vecDim/MpiSize
+       !
+       call Max_MPI(MpiComm,t_enlarge_blocks)
+       !
+       call Max_MPI(MpiComm,t_sb_get_states)
+       call Sum_MPI(MpiComm,kb_agthr_sb_states)
+       !
+       call Max_MPI(MpiComm,t_sb_diag)
+       call Max_MPI(MpiComm,t_sctr)
+       call Sum_MPI(MpiComm,kb_sent_sctr)
+       call Sum_MPI(MpiComm,kb_recv_sctr)
+       !
+       call Max_MPI(MpiComm,t_setup_sb_sparse)
+       call Max_MPI(MpiComm,t_hxv_sparse)
+       !
+       call Max_MPI(MpiComm,t_setup_sb_direct)
+       call Sum_MPI(MpiComm,kb_sb_setup_bcast)
+       !
+       call Max_MPI(MpiComm,t_hxv_direct)
+       call Max_MPI(MpiComm,t_hxv_1LxHR)
+       call Max_MPI(MpiComm,t_hxv_HLx1R)
+       call Max_MPI(MpiComm,t_hxv_AxB)
+       call Max_MPI(MpiComm,t_hxv_B)
+       call Max_MPI(MpiComm,t_hxv_A)
+       !
+
+       call Max_MPI(MpiComm,t_a2av)
+       call Sum_MPI(MpiComm,kb_sent_a2av)
+       call Sum_MPI(MpiComm,kb_recv_a2av)
+       !
+       call Max_MPI(MpiComm,t_rdm_get)
+       call Max_MPI(MpiComm,t_gthr)
+       call Sum_MPI(MpiComm,kb_sent_gthr)
+       call Sum_MPI(MpiComm,kb_recv_gthr)
+       !
+       call Max_MPI(MpiComm,t_rdm_diag)
+       call Max_MPI(MpiComm,t_rdm_renorm)
+       !
+       call Max_MPI(MpiComm,t_dmrg_step)
+    endif
+#endif
+    !
+    call append_profile("total_length_sb",dble(left%length + right%length))
+    call append_profile("reduced_sb_dim",rdcd_sb_dim)
+    call append_profile("kb_vecDim_av",kb_vecDim)
+    call append_profile("full_sb_dim",full_sb_dim)
+    call append_profile("time_enlarge_blocks",t_enlarge_blocks) !>= t_connect_blocks
+    !
+    call append_profile("time_sb_get_states",t_sb_get_states)
+    call append_profile("kb_agthr_sb_states",kb_agthr_sb_states)
+    !
+    call append_profile("time_sb_diag",t_sb_diag)
+    call append_profile("kb_sent_sctr",kb_sent_sctr)
+    call append_profile("kb_recv_sctr",kb_recv_sctr)
+    !
+    call append_profile("time_setup_sb_sparse",t_setup_sb_sparse) !>= t_connect_blocks
+    call append_profile("time_hxv_sparse",t_hxv_sparse)
+    !
+    call append_profile("time_setup_sb_direct",t_setup_sb_direct)
+    call append_profile("kb_sb_setup_bcast",kb_sb_setup_bcast)    
+    !
+    call append_profile("time_hxv_direct",t_hxv_direct)
+    call append_profile("time_hxv_1LxHR",t_hxv_1LxHR)
+    call append_profile("time_hxv_HLx1R",t_hxv_HLx1R)
+    call append_profile("time_hxv_AxB",t_hxv_AxB)
+    call append_profile("time_hxv_B",t_hxv_B)
+    call append_profile("time_hxv_A",t_hxv_A)
+    !
+    call append_profile("time_a2av",t_a2av)
+    call append_profile("kb_sent_a2av",kb_sent_a2av)
+    call append_profile("kb_recv_a2av",kb_recv_a2av)
+    !
+    call append_profile("HxV_Nop",dble(NumOp))
+    !
+    call append_profile("time_rdm_get",t_rdm_get)
+    call append_profile("kb_sent_gthr",kb_sent_gthr)
+    call append_profile("kb_recv_gthr",kb_recv_gthr)
+    call append_profile("time_rdm_diag",t_rdm_diag)
+    call append_profile("time_rdm_renorm",t_rdm_renorm)
+    !
+    call append_profile("time_dmrg_step",t_dmrg_step)
+    !
+    if(MpiMaster)then
+       unit=fopen("full_profile_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+       write(unit,*)"# STEP:",left%length
+       do i=1,size(prof_times)
+          write(unit,*)prof_names(i),prof_times(i)
+       enddo
+       write(unit,*)""
+       close(unit)
+    endif
+#endif
+    call reset_profile()
+    !
+  end subroutine set_profile
+
+
+
+
+
+
+  subroutine append_profile(string,time)
+    character(len=*) :: string
+    real(8)          :: time
+    if(MpiMaster)call append(prof_names,string)
+    if(MpiMaster)call append(prof_times,time)
+  end subroutine append_profile
+
+
+
+
+
+
+  !##################################################################
+  !##################################################################
+  !                   AUX FUNCTIONS
+  !##################################################################
+  !##################################################################
   function sector_qn_dim(self,qn) result(dim)
     type(sectors_list)   :: self
     real(8),dimension(:) :: qn

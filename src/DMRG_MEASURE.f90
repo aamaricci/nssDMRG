@@ -1,4 +1,4 @@
-MODULE DMRG_MEASURE
+module DMRG_MEASURE
   USE SCIFOR, only: to_lower
   USE DMRG_GLOBAL
   USE DMRG_CONNECT
@@ -736,7 +736,7 @@ contains
           allocate(Hvt(mpiDrs(k)*Dls(k)));Hvt=zero
           i_start = 1 + mpiOffset(k)
           i_end   = mpiDl(k)+mpiOffSet(k)
-          call vector_transpose_MPI(Drs(k),mpiDls(k),v(i_start:i_end),Dls(k),mpiDrs(k),vt)
+          call vector_transpose_MPI(Drs(k),mpiDls(k),v(i_start:i_end),Dls(k),mpiDrs(k),vt, mpiSBCOMM(k))
           do il=1,mpiDrs(k)
              do ir=1,Dls(k)
                 i = ir + (il-1)*Dls(k)
@@ -749,7 +749,7 @@ contains
              enddo
           enddo
           deallocate(vt) ; allocate(vt(Drs(k)*mpiDls(k))) ; vt=zero
-          call vector_transpose_MPI(Dls(k),mpiDrs(k),Hvt,Drs(k),mpiDls(k),vt)
+          call vector_transpose_MPI(Dls(k),mpiDrs(k),Hvt,Drs(k),mpiDls(k),vt, mpiSBCOMM(k))
           Ov(i_start:i_end) = Ov(i_start:i_end) + Vt
           deallocate(vt,Hvt)
           !

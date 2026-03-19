@@ -7,17 +7,20 @@ MODULE DMRG_SUPERBLOCK
   private
 
 
+  public :: sb_build_dims
+  public :: sb_delete_dims
   public :: sb_get_states
   public :: sb_get_shares
   public :: sb_diag
-
+  public :: sb_set_current_qn
   public :: sb_build_Hv
   public :: sb_vecDim_Hv
   public :: sb_delete_Hv
 
-  integer                          :: ispin
-  integer                          :: iorb,jorb
-  integer                          :: io,jo
+  integer :: ierr
+  integer :: ispin
+  integer :: iorb,jorb
+  integer :: io,jo
 
 
 
@@ -25,11 +28,118 @@ contains
 
 
 
+  !##############################################################
+  !##############################################################
+  !       BUILD THE SUPERBLOCK DIMENSIONS (MPI SHARES)
+  !##############################################################
+  !##############################################################
+  subroutine sb_build_dims()
+    integer                          :: Nsb
+    integer                          :: isb
+    real(8),dimension(:),allocatable :: qn
+    integer                          :: color,n_active,unit
+    !
+    Nsb  = size(sb_sector)
+    if(Nsb==0)stop "sb_build_dims error: size(sb_sector)==0"
+    !
+    call sb_delete_dims()
+    !
+    allocate(Dls(Nsb))
+    allocate(Drs(Nsb))
+    allocate(Offset(Nsb))
+#ifdef _MPI  
+    allocate(mpiDls(Nsb))
+    allocate(mpiDrs(Nsb))
+    allocate(mpiDl(Nsb))
+    allocate(mpiDr(Nsb))
+    allocate(mpiOffset(Nsb))
+    allocate(mpiSBCOMM(Nsb))
+    allocate(mpiNactive(Nsb)) 
+    mpiOffset=0
+    mpiSBCOMM=Mpi_Comm_Null
+    mpiNactive=MpiSize
+#endif
+    !
+    Offset=0
+    do isb=1,Nsb
+      qn      = sb_sector%qn(index=isb)
+      Dls(isb)= sector_qn_dim(left%sectors(1),qn)
+      Drs(isb)= sector_qn_dim(right%sectors(1),current_target_qn - qn)
+      Offset(isb)=sum(Dls(1:isb-1)*Drs(1:isb-1))
+      !
+#ifdef _MPI
+      ! MPI VARS SETUP 
+      mpiDls(isb) = Dls(isb)/MpiSize
+      mpiDrs(isb) = Drs(isb)/MpiSize
+      if(MpiRank < mod(Dls(isb),MpiSize))mpiDls(isb) = mpiDls(isb)+1
+      if(MpiRank < mod(Drs(isb),MpiSize))mpiDrs(isb) = mpiDrs(isb)+1
+      mpiDl(isb) = Drs(isb)*mpiDls(isb)
+      mpiDr(isb) = mpiDrs(isb)*Dls(isb)
+      !
+      mpiOffset(isb)=sum(Drs(1:isb-1)*mpiDls(1:isb-1))
+      !
+      !Get how many active ranks for this sector: 
+      mpiNactive(isb) = max( min(Dls(isb),MpiSize) , min(Drs(isb),MpiSize) )
+      if(mpiNactive(isb) >= MpiSize )then
+        mpiSBCOMM(isb)=MpiComm   !All ranks are active in this sector
+      else
+        color = MPI_COMM_NULL  ! for ranks that are not active in this sector
+        if(MpiRank < mpiNactive(isb))color = 1 != 1 for ranks that are  active in this sector
+        call MPI_Comm_split(MpiComm, color, MpiRank, mpiSBCOMM(isb), ierr)
+        if(MpiMaster)then
+          unit=fopen("sb_active_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+          write(unit,*)left%length,isb,Dls(isb),Drs(isb),MpiSize,mpiNactive(isb)
+          flush(unit)
+          close(unit)
+        endif
+      endif		
+#endif
+    enddo
+    !
+    dims_set=.true.
+    !	
+  end subroutine sb_build_dims
 
-  !-----------------------------------------------------------------!
-  ! purpose: build the list of states compatible with the specified
-  ! quantum numbers
-  !SUPERBLOCK SHARED THINGS:
+  subroutine sb_delete_dims
+    integer :: q
+    if(allocated(Dls))       deallocate(Dls)
+    if(allocated(Drs))       deallocate(Drs)
+    if(allocated(Offset))    deallocate(Offset)
+#ifdef _MPI
+    if(allocated(mpiDls))    deallocate(mpiDls)
+    if(allocated(mpiDrs))    deallocate(mpiDrs)
+    if(allocated(mpiDl))     deallocate(mpiDl)
+    if(allocated(mpiDr))     deallocate(mpiDr)
+    if(allocated(mpiOffset)) deallocate(mpiOffset)
+    if(allocated(mpiNactive))deallocate(mpiNactive)
+    ! Clean up if already allocated (e.g., during a sweep)
+    if(allocated(mpiSBCOMM))then
+      do q=1, size(mpiSBCOMM)
+        if(mpiSBCOMM(q) /= MPI_COMM_NULL .AND. mpiSBCOMM(q) /= MpiComm_Global) &
+          call MPI_Comm_free(mpiSBCOMM(q), ierr)
+      end do
+      deallocate(mpiSBCOMM)
+    endif
+#endif
+    !
+    dims_set=.false.
+    !
+  end subroutine sb_delete_dims
+
+
+
+
+
+
+
+
+    
+  !##############################################################
+  !##############################################################
+  !            BUILD THE SUPERBLOCK STATES LIST
+  !##############################################################
+  !##############################################################
+  !shared objects:
   ! integer,dimension(:),allocatable   :: sb_states
   ! type(sectors_list)                 :: sb_sector
   !-----------------------------------------------------------------!
@@ -170,32 +280,36 @@ contains
   subroutine sb_get_shares()
     integer :: unit,q
     call sb_build_dims()
-    if(MpiMaster)then
-       unit=fopen("sb_shares_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
-       write(unit,*)"# STEP:",left%length
-       do q=1,size(sb_sector)
+    unit=fopen("sb_shares_rank"//str(MpiRank)//"_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+    write(unit,*)"# STEP:",left%length
+    do q=1,size(sb_sector)
 #ifdef _MPI
-          if(MpiStatus)then
-             write(unit,*)q,mpiDls(q)*Drs(q),mpiDls(q),Drs(q)
-          else
-             write(unit,*)q,Dls(q)*Drs(q),Dls(q),Drs(q)
-          endif
+      if(MpiStatus)then
+        write(unit,*)q,Drs(q),mpiDls(q)
+      else
+         write(unit,*)q,Drs(q),Dls(q)
+      endif
 #else
-          write(unit,*)q,Dls(q)*Drs(q),Dls(q),Drs(q)
+      write(unit,*)q,Drs(q),Dls(q)
 #endif
-       enddo
-       write(unit,*)""
-       flush(unit)
-       close(unit)
-    endif
+    enddo
+    write(unit,*)""
+    flush(unit)
+    close(unit)
     call Barrier_MPI(MpiComm)
     call sb_delete_dims()
   end subroutine sb_get_shares
 
 
-  !-----------------------------------------------------------------!
-  ! Purpose: Diagonalize the SuperBlock problem.
-  !-----------------------------------------------------------------!
+
+
+
+
+  !##############################################################
+  !##############################################################
+  !            Diagonalize the SuperBlock problem               !
+  !##############################################################
+  !##############################################################
   subroutine sb_diag()
     integer                               :: m_sb
     integer                               :: Nitermax,Neigen,Nblock
@@ -337,10 +451,11 @@ contains
 
 
 
-
+  !##################################################################
   !##################################################################
   !         SETUP THE SUPERBLOCK HAMILTONIAN PROBLEM
-  ! . if Hmat: returb H^SB as dense matrix there for Lapack use
+  !##################################################################
+  ! . if Hmat: return H^SB as dense matrix there for Lapack use
   ! . if sparse_H = T: build H^SB as sparse matrix
   ! . if sparse_H = F: setup H^SB terms and blocks for H*v procedure
   !##################################################################
@@ -362,18 +477,10 @@ contains
     m_sb = size(sb_states)
     Nsb  = size(sb_sector)
     !
+    !
+    call sb_build_dims()
+    !    
 #ifdef _MPI
-    if(allocated(Dls))deallocate(Dls)
-    if(allocated(Drs))deallocate(Drs)
-    if(allocated(mpiDls))deallocate(mpiDls)
-    allocate(Dls(Nsb),Drs(Nsb),mpiDls(Nsb))
-    do q=1,Nsb
-       qn        = sb_sector%qn(index=q)
-       Dls(q)    = sector_qn_dim(left%sectors(1),qn)
-       Drs(q)    = sector_qn_dim(right%sectors(1),current_target_qn - qn)
-       mpiDls(q) = Dls(q)/MpiSize
-       if(MpiRank< mod(Dls(q),MpiSize))mpiDls(q) = mpiDls(q)+1
-    enddo
 #ifdef _DEBUG
     if(MpiStatus.AND.verbose>4.AND.(MpiComm/=Mpi_Comm_Null).AND.MpiSize>=1)then
        if(MpiMaster)write(*,*)"         mpiRank,          mpiDls        -        mpiDl        -      mpiL    -   mpiOffset"
@@ -386,7 +493,6 @@ contains
        call Barrier_MPI(MpiComm)
     endif
 #endif
-    deallocate(Dls,Drs,mpiDls)
 #endif
     !
     !IF PRESENT HMAT: get SB_H sparse > dump it to dense Hmat > return
@@ -468,6 +574,7 @@ contains
     endif
     !
     call sb_delete_dims()
+    !
     if(allocated(isb2jsb))deallocate(isb2jsb)
     if(allocated(IsHconjg))deallocate(IsHconjg)
     if(allocated(RowOffset))deallocate(RowOffset)
@@ -479,53 +586,79 @@ contains
 
 
 
-
-  function sb_vecDim_Hv() result(vecDim)
+function sb_vecDim_Hv() result(vecDim)
     integer                          :: vecDim           !vector or vector chunck dimension
     real(8),dimension(:),allocatable :: qn
     integer                          :: q,Nsb,i,unit
     !
+    if(.not.dims_set)stop "sb_vecDim_Hv error: dimensions not set. Call sb_build_dims() first."
+    !
     Nsb  = size(sb_sector)
-    if(allocated(Dls))deallocate(Dls)
-    if(allocated(Drs))deallocate(Drs)
-    if(allocated(mpiDls))deallocate(mpiDls)
-    if(allocated(mpiDl))deallocate(mpiDl)
-    allocate(Dls(Nsb),Drs(Nsb),mpiDls(Nsb),mpiDl(Nsb))
-    do q=1,Nsb
-       qn     = sb_sector%qn(index=q)
-       Dls(q) = sector_qn_dim(left%sectors(1),qn)
-       Drs(q) = sector_qn_dim(right%sectors(1),current_target_qn - qn)
-    enddo
 #ifdef _MPI
     if(MpiStatus)then
-       do q=1,Nsb
-          mpiDls(q) = Dls(q)/MpiSize
-          if(MpiRank < mod(Dls(q),MpiSize))mpiDls(q) = mpiDls(q)+1
-          mpiDl(q)  = Drs(q)*mpiDls(q)
-       enddo
+      vecDim = sum(mpiDl)
     else
-       do q=1,Nsb
-          mpiDls(q)= Dls(q)
-          mpiDl(q)  = Drs(q)*mpiDls(q)
-       enddo
-       if(sum(mpiDl)/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
+      vecDim = sum(Drs*Dls)
+      if(vecDim/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
     endif
 #else
-    do q=1,Nsb
-       mpiDls(q)= Dls(q)
-       mpiDl(q)  = Drs(q)*mpiDls(q)
-    enddo
-    if(sum(mpiDl)/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
+    vecDim = sum(Drs*Dls)
+    if(vecDim/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
 #endif
-    !
-    vecDim = sum(mpiDl)
     kb_vecDim = vecDim*DATA_kb_size
   end function sb_vecDim_Hv
 
+!   function sb_vecDim_Hv() result(vecDim)
+!     integer                          :: vecDim           !vector or vector chunck dimension
+!     real(8),dimension(:),allocatable :: qn
+!     integer                          :: q,Nsb,i,unit
+!     !
+!     Nsb  = size(sb_sector)
+!     if(allocated(Dls))deallocate(Dls)
+!     if(allocated(Drs))deallocate(Drs)
+!     if(allocated(mpiDls))deallocate(mpiDls)
+!     if(allocated(mpiDl))deallocate(mpiDl)
+!     allocate(Dls(Nsb),Drs(Nsb),mpiDls(Nsb),mpiDl(Nsb))
+!     do q=1,Nsb
+!        qn     = sb_sector%qn(index=q)
+!        Dls(q) = sector_qn_dim(left%sectors(1),qn)
+!        Drs(q) = sector_qn_dim(right%sectors(1),current_target_qn - qn)
+!     enddo
+! #ifdef _MPI
+!     if(MpiStatus)then
+!        do q=1,Nsb
+!           mpiDls(q) = Dls(q)/MpiSize
+!           if(MpiRank < mod(Dls(q),MpiSize))mpiDls(q) = mpiDls(q)+1
+!           mpiDl(q)  = Drs(q)*mpiDls(q)
+!        enddo
+!     else
+!        do q=1,Nsb
+!           mpiDls(q)= Dls(q)
+!           mpiDl(q)  = Drs(q)*mpiDls(q)
+!        enddo
+!        if(sum(mpiDl)/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
+!     endif
+! #else
+!     do q=1,Nsb
+!        mpiDls(q)= Dls(q)
+!        mpiDl(q)  = Drs(q)*mpiDls(q)
+!     enddo
+!     if(sum(mpiDl)/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
+! #endif
+!     !
+!     vecDim = sum(mpiDl)
+!     kb_vecDim = vecDim*DATA_kb_size
+!   end function sb_vecDim_Hv
 
 
 
 
+
+  !##################################################################
+  !##################################################################
+  !                   AUX FUNCTIONS
+  !##################################################################
+  !##################################################################
   subroutine sb_check_Hv(anyZero)
     integer :: vecDim           !vector or vector chunck dimension
     integer :: ierr
@@ -542,6 +675,20 @@ contains
     end if
 #endif
   end subroutine sb_check_Hv
+
+
+  subroutine sb_set_current_qn()
+    current_L         = left%length + right%length
+    select case(str(to_lower(QNtype(1:1))))
+    case default;stop "DMRG_MAIN error: QNtype != [local,global]"
+    case("l")
+       current_target_QN = int(target_qn*current_L*Norb)
+    case("g")
+       current_target_QN = min(current_L,int(target_qn*Norb)) !to check
+    end select
+  end subroutine sb_set_current_qn
+
+
 
 END MODULE DMRG_SUPERBLOCK
 

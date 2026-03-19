@@ -1,5 +1,6 @@
 MODULE DMRG_RDM  
   USE DMRG_GLOBAL
+  USE DMRG_SUPERBLOCK 
   implicit none
   private
 
