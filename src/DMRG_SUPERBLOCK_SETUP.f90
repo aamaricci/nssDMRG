@@ -905,14 +905,16 @@ contains
     !
     if(.not.MpiStatus)stop "spMatVec_mpi_normal_main ERROR: MpiStatus = F"
     !
-    !
-      
+    !      
     Hv=zero
     t0=t_start()
     !> loop over all the SB sectors: k
     sector: do k=1,size(sb_sector)
       !
+      ! if(MpiMaster)write(LOGfile,*)"SB sector:",k," qn:",sb_sector%qn(k)
+      !
       !> apply the 1^L x H^r: share L columns
+      ! if(MpiMaster)write(LOGfile,*)"Apply 1^L x H^R: share L columns"
       t0=t_start()
       do il=1,mpiDls(k)   !Fix the column il(q): v_il(q) for each thread
         !
@@ -931,6 +933,7 @@ contains
       !       
       !> apply the H^L x 1^r
       !L part: non-contiguous in memory -> MPI transposition
+      ! if(MpiMaster)write(LOGfile,*)"Apply H^L x 1^R: share R rows, MPI transpose L part"
       t0=t_start()
       allocate(vt(mpiDrs(k)*Dls(k))) ;vt=zero
       allocate(Hvt(mpiDrs(k)*Dls(k)));Hvt=zero
@@ -938,7 +941,6 @@ contains
       i_end   = Drs(k)*mpiDls(k)+mpiOffSet(k)
       call vector_transpose_MPI(Drs(k),mpiDls(k),v(i_start:i_end),Dls(k),mpiDrs(k),vt,mpiSBCOMM(k))
       do il=1,mpiDrs(k)  !Fix the *column* ir: v_ir(q). Transposed order
-        !
         do ir=1,Dls(k)  !go row-by-row H^l.v_ir: Transposed order
           i = ir + (il-1)*Dls(k)
           do jcol=1,Hleft(k)%row(ir)%Size
@@ -948,7 +950,6 @@ contains
             Hvt(i) = Hvt(i) + val*vt(j)
           end do
         enddo
-        !
       enddo
       deallocate(vt) ; allocate(vt(Drs(k)*mpiDls(k))) ; vt=zero
       call vector_transpose_MPI(Dls(k),mpiDrs(k),Hvt,Drs(k),mpiDls(k),vt,mpiSBCOMM(k))
@@ -968,7 +969,7 @@ contains
       t0=t_start()
       do it=1,tNso
         if(.not.A(it,k)%status.OR..not.B(it,k)%status)cycle
-        !
+      !   if(MpiMaster)write(LOGfile,*)"Apply A.x.B term it:",it," q:",isb2jsb(it,k)
         q = isb2jsb(it,k)
         !
         !1. evaluate MMP: C = B.vec(V)
@@ -988,6 +989,7 @@ contains
         shift = mpiOffset(q)
         if(isHconjg(it,k)==1)shift = mpiOffset(k)
         !           
+      !   if(MpiMaster)write(LOGfile,*)"MPI A.x.B: mpiArow,mpiAcol,mpiBrow:",mpiArow,mpiAcol,mpiBrow
         allocate(C(B(it,k)%Nrow,mpiAcol));C=zero
         t0=t_start()
         do aj=1,mpiAcol
@@ -1014,9 +1016,8 @@ contains
         !  =\sum_aj [A(ai,aj)C^t(aj,bi)]^T
         ! = [Hvt[A.Nrow,mpiBrow]]^T
         ! => Hv[B.Nrow,mpiArow]
-        !        
-        !
         !use mpiSBCOMM(q) if mpiNactive(q)>mpiNactive(k) and mpiSBCOMM(k) otherwise
+      !   if(MpiMaster)write(LOGfile,*)"MPI A.x.B: MPI transpose C"
         if(mpiNactive(q)>mpiNactive(k))then
            abcomm = mpiSBCOMM(q)
         else
@@ -1045,8 +1046,10 @@ contains
         enddo
         t_hxv_A=t_hxv_A+t_stop()
         !
+      !   if(MpiMaster)write(LOGfile,*)"MPI A.x.B: MPI transpose A.C^T"
         abcomm = mpiSBCOMM(k)
         if(isHconjg(it,k)==1)abcomm = mpiSBCOMM(q) 
+      !   if(MpiMaster)write(LOGfile,*)abcomm,MPI_COMM_NULL,MpiComm
         call vector_transpose_MPI(A(it,k)%Nrow,mpiBrow,Hvt,B(it,k)%Nrow,mpiArow,vt,abcomm)
         i_start = 1 + mpiOffset(k)
         if(isHconjg(it,k)==1)i_start = 1 + mpiOffset(q)

@@ -92,15 +92,25 @@ contains
          mpiSBCOMM(isb)  = MpiComm   !All ranks are active in this sector
       else
          mpiNactive(isb) = n_active
-         color           = MPI_COMM_NULL !we use MPI_COMM_NULL rather than MPI_UNDEFINED because the latter can cause problems in some MPI implementations when used in MPI_Comm_split. Do not use MPI_UNDEFINED here.
-         if(MpiRank < mpiNactive(isb))color = 1 ! 1 for ranks that are  active in this sector
-         call MPI_Comm_split(MpiComm, color, MpiRank, mpiSBCOMM(isb), ierr)
-         if(MpiMaster.AND..not.quiet_)then
-            if(verbose>2)write(LOGfile,"(A,I6,A,I6,A,I6,A,I6,A,I6)")"Reducing N_cpu to Nactive:",n_active," for sector ",isb,"/",Nsb," with Dls=",Dls(isb)," and Drs=",Drs(isb)
-            unit=fopen("sb_active_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
-            write(unit,*)left%length,isb,Dls(isb),Drs(isb),MpiSize,mpiNactive(isb)
-            flush(unit)
-            close(unit)
+         color           = MPI_UNDEFINED
+         if(MpiRank < mpiNactive(isb))color = 1
+         call MPI_Comm_split(MpiComm_Global, color, MpiRank, mpiSBCOMM(isb), ierr)
+         if(.not.quiet_)then
+            if(MpiMaster)then
+               if(verbose>2)write(LOGfile,"(A,I6,A,I6,A,I6,A,I6,A,I6)")"Reducing N_cpu to Nactive:",n_active,&
+               " for sector ",isb,"/",Nsb," with Dls=",Dls(isb)," and Drs=",Drs(isb)
+               unit=fopen("sb_active_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+               write(unit,*)left%length,isb,Dls(isb),Drs(isb),MpiSize,mpiNactive(isb)
+               flush(unit)
+               close(unit)
+            endif
+#ifdef _DEBUG         
+            if(mpisbcomm(isb) == mpi_comm_null) then
+               write(logfile,*) "rank ", mpirank, " is correctly idle (comm is null)"
+            else
+               write(logfile,*) "rank ", mpirank, " is active in comm ", mpisbcomm(isb)
+            endif
+#endif                     
          endif
       endif		
 #endif
@@ -130,6 +140,7 @@ contains
       end do
       deallocate(mpiSBComm)
     endif
+    MpiComm_Global=MpiComm
 #endif
     !
     dims_set=.false.

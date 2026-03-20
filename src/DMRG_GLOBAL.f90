@@ -342,7 +342,7 @@ contains
        call MPI_AllToAll(&
             send_counts(0:,i),1,MPI_INTEGER,&
             recv_counts(0:,i),1,MPI_INTEGER,&
-            MpiComm,ierr) !not sure if this is the right communicator to use here, but it should be fine since only active ranks have non-zero counts
+            sub_comm,ierr) !not sure if this is the right communicator to use here, but it should be fine since only active ranks have non-zero counts
     enddo
     !
     do i=1,Ntot
