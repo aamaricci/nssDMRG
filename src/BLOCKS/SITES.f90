@@ -7,9 +7,11 @@ MODULE SITES
   USE LIST_OPERATORS
   USE LIST_SECTORS
   USE HLOCAL
+#ifdef _MPI
+  USE SCIFOR,only: check_MPI,get_master_MPI   
+#endif  
   implicit none
   private
-
 
   type site
      integer                                     :: Dim=1
@@ -289,9 +291,14 @@ contains
     real(8),dimension(2)                  :: h_
     real(8),dimension(:,:),allocatable    :: H,Sz,Sp,Sx
 #endif
+logical :: master=.true.
+    !
+#ifdef _MPI
+    if(check_MPI())master  = get_master_MPI()
+#endif
     !
 #ifdef _DEBUG
-    write(LOGfile,*)"DEBUG: Spin SITE with SU"//str(sun)
+    if(master)write(LOGfile,*)"DEBUG: Spin SITE with SU"//str(sun)
 #endif
     h_ = zero; if(present(hvec))h_=hvec
     !
@@ -364,9 +371,14 @@ contains
     integer,dimension(:),allocatable                     :: Basis
     integer                                              :: iorb,ispin
     character(len=:),allocatable                         :: key
+    logical :: master=.true.
     !
+#ifdef _MPI
+    if(check_MPI())master  = get_master_MPI()
+#endif
+  
 #ifdef _DEBUG
-    write(LOGfile,*)"DEBUG: ELECTRON SITE"
+    if(master)write(LOGfile,*)"DEBUG: ELECTRON SITE"
 #endif
     call self%free()
     self%SiteType="FERMION"
@@ -379,10 +391,10 @@ contains
     self%Dim = 4**Norb
     !
     !Set local H operator
-    write(LOGfile,"(A,I3,A1,I3,A)")&
+    if(master)write(LOGfile,"(A,I3,A1,I3,A)")&
          "Using Hloc, shape=[",Nspin*Norb,",",Nspin*Norb,"]"
     call print_matrix(Hloc_)
-    write(LOGfile,"(A)")""
+    if(master)write(LOGfile,"(A)")""
     !
     !> Build local Hamiltonian:
     H = build_Hlocal_operator(hloc_)
