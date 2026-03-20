@@ -14,16 +14,16 @@ The structure of this code is largely inspired by the excellent simple-DMRG proj
 - [Installation](#installation)
 
 - [Development](#Development)
-    - [Milestone 1](#milestone1) Basic development and testing.
-    - [Milestone 2](#milestone2) Quantum Number conservation.
-    - [Milestone 3](#milestone3) Code reshuffle, SuperBlock modules.
-    - [Milestone 4](#milestone4) Finite DMRG and Measure.
-    - [Milestone 5](#milestone5) Direct $H_{SB}\vec{v}$ product. Serial. 
-    - [Milestone 6](#milestone6) Further development
-    - [Milestone 7](#milestone7) Distributed parallel setup. MPI-DMRG.
-    - [Milestone 8](#milestone8) Profiling and `Block` I/O restart.
-    - [Milestone 9](#milestone8) Implement Periodic Boundary Conditions.
-
+  - [Milestone 1](#milestone1) Basic development and testing.
+  - [Milestone 2](#milestone2) Quantum Number conservation.
+  - [Milestone 3](#milestone3) Code reshuffle, SuperBlock modules.
+  - [Milestone 4](#milestone4) Finite DMRG and Measure.
+  - [Milestone 5](#milestone5) Direct $H_{SB}\vec{v}$ product. Serial. 
+  - [Milestone 6](#milestone6) Further development
+  - [Milestone 7](#milestone7) Distributed parallel setup. MPI-DMRG.
+  - [Milestone 8](#milestone8) Profiling and `Block` I/O restart.
+  - [Milestone 9](#milestone9) Implement Periodic Boundary Conditions.
+  - [Milestone 10](#milestone10) Fix Symmetry Fragmentation using MPI sub-communicators.
 - [Results](#results)
     
 ## <a name="dependencies"></a> Dependencies
@@ -174,6 +174,20 @@ PBC 1:
 PBC 2:   
 `.o-[o-o..L..o-o-o]-[o-o-o..R..o-o]-o.`  
 `^-----------------------------------^`
+
+### <a name="milestone10"></a> Milestone 10
+
+In this milestone we fixed the issue of symmetry fragmentation in the parallel implementation of the DMRG. The problem is that, as we distribute the superblock vector blocks $|\psi(q)\rangle$ column-wise across the nodes, we might end up with some nodes which do not have any column to process for a given quantum number sector $q$, thus resulting in a load imbalance and a bottleneck in the execution. 
+
+To solve this issue we implemented a strategy based on MPI sub-communicators, which allows to split the global communicator into smaller communicators, one per symmetry sectors, restricted to the maximum required number of cores fixed by the conditions:  
+$$
+N_{active}(q) = \max( \min(D_L(q),N_{cores}), \min(D_R(q),N_{cores}) )
+$$
+
+ This way we can ensure that each node has a more balanced workload and we can optimize the communication patterns accordingly. The implementation of this strategy required just few modifications to the existing code, essentially concentrated in the MPI matrix-vector product and `vector_transpose_MPI` function, where the communication is performed. 
+
+ 
+
 
 ## <a name="results"></a> Results
 Here are some results for the Heisenberg model:  
