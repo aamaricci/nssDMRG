@@ -32,7 +32,7 @@ contains
     if(MpiMaster)write(LOGfile,*)"DEBUG: get RDM"
 #endif
     !
-    call sb_build_dims()
+    call sb_build_dims(quiet=.true.)
     !
 #ifdef _MPI
     if(MpiStatus)then

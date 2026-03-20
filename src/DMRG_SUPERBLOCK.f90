@@ -33,11 +33,15 @@ contains
   !       BUILD THE SUPERBLOCK DIMENSIONS (MPI SHARES)
   !##############################################################
   !##############################################################
-  subroutine sb_build_dims()
+  subroutine sb_build_dims(quiet)
+    logical,optional                 :: quiet  
     integer                          :: Nsb
     integer                          :: isb
     real(8),dimension(:),allocatable :: qn
     integer                          :: color,n_active,unit
+    logical                          :: quiet_
+    !
+    quiet_=.true.;if(present(quiet))quiet_=quiet
     !
     Nsb  = size(sb_sector)
     if(Nsb==0)stop "sb_build_dims error: size(sb_sector)==0"
@@ -79,19 +83,25 @@ contains
       mpiOffset(isb)=sum(Drs(1:isb-1)*mpiDls(1:isb-1))
       !
       !Get how many active ranks for this sector: 
-      mpiNactive(isb) = max( min(Dls(isb),MpiSize) , min(Drs(isb),MpiSize) )
-      if(mpiNactive(isb) >= MpiSize )then
-        mpiSBCOMM(isb)=MpiComm   !All ranks are active in this sector
+      n_active = max( min(Dls(isb),MpiSize) , min(Drs(isb),MpiSize) )
+      !Here we SPLIT the communicators because we do not want the idle ranks to 
+      !be completely shut off the computation but we want them to wait for the active ranks to 
+      !finish and then move on together to the next sector.
+      if(n_active >= MpiSize )then
+         mpiNactive(isb) = MpiSize
+         mpiSBCOMM(isb)  = MpiComm   !All ranks are active in this sector
       else
-        color = MPI_COMM_NULL  ! for ranks that are not active in this sector
-        if(MpiRank < mpiNactive(isb))color = 1 != 1 for ranks that are  active in this sector
-        call MPI_Comm_split(MpiComm, color, MpiRank, mpiSBCOMM(isb), ierr)
-        if(MpiMaster)then
-          unit=fopen("sb_active_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
-          write(unit,*)left%length,isb,Dls(isb),Drs(isb),MpiSize,mpiNactive(isb)
-          flush(unit)
-          close(unit)
-        endif
+         mpiNactive(isb) = n_active
+         color           = MPI_COMM_NULL !we use MPI_COMM_NULL rather than MPI_UNDEFINED because the latter can cause problems in some MPI implementations when used in MPI_Comm_split. Do not use MPI_UNDEFINED here.
+         if(MpiRank < mpiNactive(isb))color = 1 ! 1 for ranks that are  active in this sector
+         call MPI_Comm_split(MpiComm, color, MpiRank, mpiSBCOMM(isb), ierr)
+         if(MpiMaster.AND..not.quiet_)then
+            if(verbose>2)write(LOGfile,"(A,I6,A,I6,A,I6,A,I6,A,I6)")"Reducing N_cpu to Nactive:",n_active," for sector ",isb,"/",Nsb," with Dls=",Dls(isb)," and Drs=",Drs(isb)
+            unit=fopen("sb_active_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+            write(unit,*)left%length,isb,Dls(isb),Drs(isb),MpiSize,mpiNactive(isb)
+            flush(unit)
+            close(unit)
+         endif
       endif		
 #endif
     enddo
@@ -113,13 +123,12 @@ contains
     if(allocated(mpiDr))     deallocate(mpiDr)
     if(allocated(mpiOffset)) deallocate(mpiOffset)
     if(allocated(mpiNactive))deallocate(mpiNactive)
-    ! Clean up if already allocated (e.g., during a sweep)
-    if(allocated(mpiSBCOMM))then
-      do q=1, size(mpiSBCOMM)
-        if(mpiSBCOMM(q) /= MPI_COMM_NULL .AND. mpiSBCOMM(q) /= MpiComm_Global) &
-          call MPI_Comm_free(mpiSBCOMM(q), ierr)
+    if(allocated(mpiSBComm))then
+      do q=1, size(mpiSBComm)
+        if(mpiSBComm(q) /= MPI_COMM_NULL .AND. mpiSBComm(q) /= MpiComm_Global) &
+        call MPI_Comm_free(mpiSBComm(q), ierr)
       end do
-      deallocate(mpiSBCOMM)
+      deallocate(mpiSBComm)
     endif
 #endif
     !
@@ -280,7 +289,7 @@ contains
 
   subroutine sb_get_shares()
     integer :: unit,q
-    call sb_build_dims()
+    call sb_build_dims(quiet=.true.)
     unit=fopen("sb_shares_rank"//str(MpiRank)//"_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
     write(unit,*)"# STEP:",left%length
     do q=1,size(sb_sector)
@@ -370,9 +379,7 @@ contains
                   tol=lanc_tolerance,&
                   iverbose=(verbose>4),NumOp=NumOp)
              call Bcast_MPI(MpiComm,gs_energy)
-             call sb_build_dims()
              call scatter_vector_MPI(MpiComm,gs_tmp,gs_vector)
-             call sb_delete_dims()
              deallocate(gs_tmp)
           else
              call sp_eigh(MpiComm,spHtimesV_p,gs_energy,gs_vector,&
@@ -423,10 +430,8 @@ contains
 #ifdef _MPI
        if(MpiStatus)then
           call Bcast_MPI(MpiComm,evals)
-          call sb_build_dims()
           call scatter_vector_MPI(MpiComm,Hsb(:,1:Neigen),gs_vector)
           gs_energy(1:Neigen)   = evals(1:Neigen)
-          call sb_delete_dims()
        else
           gs_vector(:,1:Neigen) = Hsb(:,1:Neigen)
           gs_energy(1:Neigen)   = evals(1:Neigen)
@@ -479,18 +484,26 @@ contains
     Nsb  = size(sb_sector)
     !
     !
-    call sb_build_dims()
+    call sb_build_dims(quiet=.false.)
     !    
 #ifdef _MPI
 #ifdef _DEBUG
     if(MpiStatus.AND.verbose>4.AND.(MpiComm/=Mpi_Comm_Null).AND.MpiSize>=1)then
-       if(MpiMaster)write(*,*)"         mpiRank,          mpiDls        -        mpiDl        -      mpiL    -   mpiOffset"
-       do irank=0,MpiSize-1
+        if(MpiMaster)then 
+          write(LOGfile,"(A6,A3,A9)",advance="no")"Irank"," | ","mpiDls(q)" 
+          write(LOGfile,"(*(A9))",advance="no")(str(q),q=2,Nsb)
+          write(LOGfile,"(A3,A6,A3,A12)",advance="no")" | ", "mpiDl"," | ","mpiOffset(q)"
+          write(LOGfile,"(*(A9))",advance="yes")(str(q),q=2,Nsb)
+        endif 
+        do irank=0,MpiSize-1
           call Barrier_MPI(MpiComm)
-          if(MpiRank==irank)write(*,*)MpiRank,mpiDls,"-",&
-               Drs(:)*mpiDls(:),"-",sum(Drs(:)*mpiDls(:)),"-",&
-               (sum(Drs(1:q-1)*mpiDls(1:q-1)),q=1,Nsb)
-       enddo
+          if(MpiRank==irank)then
+            write(LOGfile,"(I6,A3)",advance="no")irank," | "
+            write(LOGfile,"(*(I9))",advance="no")(mpiDls(q),q=1,Nsb)
+            write(LOGfile,"(A3,I6,A3)",advance="no")" | ",sum(Drs(:)*mpiDls(:))," | "
+            write(LOGfile,"(*(I9))",advance="yes")(sum(Drs(1:q-1)*mpiDls(1:q-1)),q=1,Nsb)
+          endif
+        enddo
        call Barrier_MPI(MpiComm)
     endif
 #endif

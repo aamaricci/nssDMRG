@@ -183,13 +183,9 @@ MODULE DMRG_GLOBAL
 #ifdef _MPI
   integer                                        :: MpiComm_Global=MPI_COMM_NULL
   integer                                        :: MpiComm=MPI_COMM_NULL
-  integer                                        :: MpiGroup_Global=MPI_GROUP_NULL
-  integer                                        :: MpiGroup=MPI_GROUP_NULL
 #else
   integer                                        :: MpiComm_Global=0
   integer                                        :: MpiComm=0
-  integer                                        :: MpiGroup_Global=0
-  integer                                        :: MpiGroup=0
 
 #endif
   logical                                        :: MpiStatus=.false.
@@ -200,7 +196,7 @@ MODULE DMRG_GLOBAL
   integer,allocatable,dimension(:)               :: mpiDrs
   integer,allocatable,dimension(:)               :: mpiDl,mpiDr
   integer,allocatable,dimension(:)               :: mpiOffset
-  integer,allocatable,dimension(:)               :: mpiSBCOMM ! sub-comu 
+  integer,allocatable,dimension(:)               :: mpiSBComm ! sub-communicators for each sb sector
   integer,allocatable,dimension(:)               :: mpiNactive ! number of active ranks in each sb sector
 
 
@@ -250,7 +246,6 @@ contains
     integer :: typesize
     MpiComm_Global = MPI_COMM_WORLD
     MpiComm        = MPI_COMM_WORLD
-    call Mpi_Comm_group(MpiComm_Global,MpiGroup_Global,ierr)
     MpiStatus      = .true.
     MpiSize        = get_Size_MPI(MpiComm_Global)
     MpiRank        = get_Rank_MPI(MpiComm_Global)
@@ -275,7 +270,6 @@ contains
 #ifdef _MPI    
     MpiComm_Global = MPI_UNDEFINED
     MpiComm        = MPI_UNDEFINED
-    MpiGroup_Global= MPI_GROUP_NULL
     MpiStatus      = .false.
     MpiSize        = 1
     MpiRank        = 0
@@ -319,8 +313,8 @@ contains
     integer                             :: counts,Ntot
     integer                             :: i,j,irank,ierr
     !
-    !if (sub_comm == MPI_COMM_NULL) return
-	!
+    if (sub_comm == MPI_COMM_NULL) return
+	  !
 		!
 		!Round robin distribution of columns: hardcoded for now, can be easily changed to block distribution if needed	
     counts = Nrow/MpiSize

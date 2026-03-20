@@ -74,7 +74,7 @@ contains
     !
     if(MpiMaster)call start_timer("Start measuring..."//str(string))
     !
-    call sb_build_dims()
+    call sb_build_dims(quiet=.true.)
     !
     Nsb  = size(sb_sector)
     !
