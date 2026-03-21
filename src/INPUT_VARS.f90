@@ -18,6 +18,10 @@ MODULE INPUT_VARS
   real(8)                      :: Edmrg
   !Threshold energy used to evaluate the number of states to keep.
   !If 0d0 use fixed Mdmrg.
+  real(8)                      :: QNtruncation_error
+  !Threshold error for the Quantum Number truncation
+  integer                      :: QNtruncation_dim
+  !Threshold dimension for the Quantum Number truncation   
   integer                      :: QNdim
   !Number of conserved Quantum Numbers to consider:
   character(len=12)            :: QNtype
@@ -198,6 +202,15 @@ contains
     call parse_input_variable(dmrg_mode,"DMRG_MODE",INPUTunit,&
          default='normal',&
          comment="Flag to set DMRG type: normal=normal, superc=superconductive, nonsu2=broken SU(2)")
+
+     call parse_input_variable(QNtruncation_error,"QNtruncation_error",INPUTunit,&
+         default=0d0,&
+         comment="Threshold error on the the symmetry sector RDM truncation: W_k=sum_{i\in QN(k) w_i < QNtruncation_error are excluded")
+
+     call parse_input_variable(QNtruncation_dim,"QNtruncation_dim",INPUTunit,&
+         default=1,&
+         comment="Threshold dimension on the symmetry sector RDM truncation: dim(QN(k)<QNtruncation_dim are excluded.")
+
     call parse_input_variable(QNdim,"QNdim",INPUTunit,&
          default=1,&
          comment="Total  conserved abelian quantum numbers to consider.")

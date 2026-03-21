@@ -1,6 +1,7 @@
 MODULE MATRIX_BLOCKS
   USE SCIFOR, only: str,free_unit,assert_shape,zeye,eigh,sort_quicksort
   USE AUX_FUNCS
+  USE INPUT_VARS
   USE MATRIX_SPARSE, only:sparse_matrix,as_matrix
   implicit none
   private
@@ -315,7 +316,7 @@ contains
   !##################################################################
   !##################################################################
   !+------------------------------------------------------------------+
-  !PURPOSE: get 
+  !PURPOSE: get a single block matrix given its index
   !+------------------------------------------------------------------+
   function get_block_blocks_matrix(self,index,m) result(matrix)
     class(blocks_matrix)                  :: self
@@ -580,18 +581,22 @@ contains
   ! the EigenVectors matrix overwrites the block and the EigenValues
   ! are stored in the array E of the block (so far unused). 
   !+------------------------------------------------------------------+
-  subroutine eigh_blocks_matrix(self,sort,reverse,order)
+  subroutine eigh_blocks_matrix(self,sort,reverse,order,Dqn)
     class(blocks_matrix),intent(inout)        :: self
     logical,optional                          :: sort,reverse
+    integer,optional                          :: Dqn
     integer,dimension(:),allocatable,optional :: order
     logical                                   :: sort_,reverse_
+    integer                                   :: Dqn_
     real(8),dimension(:),allocatable          :: Rtmp
     integer,dimension(:),allocatable          :: Itmp
     type(block_type),pointer                  :: c
     integer                                   :: i,Nloc,Offset,N
+    real(8) :: block_weight
     !
-    sort_   =.true.;if(present(sort))sort_=sort
-    reverse_=.true.;if(present(reverse))reverse_=reverse
+    sort_   =.true.            ;if(present(sort))sort_=sort
+    reverse_=.true.            ;if(present(reverse))reverse_=reverse
+    Dqn_    =QNtruncation_dim  ;if(present(Dqn))Dqn_=Dqn
     !
     N = self%Nrow
     if(N/=self%Ncol)print*,"WARNING eigh blocks matrix: self is not square"
@@ -610,7 +615,12 @@ contains
        allocate(c%E(Nloc));c%E=0d0
        call eigh(c%M,c%E)  !<- overwrites blocks with eigenvec matrix
        !
-       where(c%E<0d0)c%E=1d-20
+       !truncate small eigenvalues: if sector contribution is too small OR 
+       !its dimensions is too small then set their eigenvalue to smallest dble
+       block_weight=sum(c%E)
+       if( block_weight < QNtruncation_error .OR. Nloc<Dqn_ )c%E=tiny(1d0)
+       where(c%E<0d0)c%E=tiny(1d0)
+       !
        self%evalues(Offset+1:Offset+Nloc) = c%E
        Offset = Offset + Nloc
        !

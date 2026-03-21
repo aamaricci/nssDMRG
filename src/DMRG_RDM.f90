@@ -192,7 +192,8 @@ contains
           call start_timer("Diag rho "//to_lower(str(label)));
           t0=t_start()
           call rho_left%eigh(sort=.true.,reverse=.true.)
-          call stop_timer("Diag rho "//to_lower(str(label)));t_rdm_diag=t_rdm_diag+t_stop()
+          t_rdm_diag=t_rdm_diag+t_stop()
+          call stop_timer("Diag rho "//to_lower(str(label)))
           !
           if(allocated(rho_left_evals))deallocate(rho_left_evals)
           allocate(rho_left_evals, source=rho_left%evals())
