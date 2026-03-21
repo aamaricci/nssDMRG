@@ -299,25 +299,26 @@ contains
 
 
   subroutine sb_get_shares()
-    integer :: unit,q
+    integer :: unit,q,irank
     call sb_build_dims(quiet=.true.)
-    unit=fopen("sb_shares_rank"//str(MpiRank)//"_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
-    write(unit,*)"# STEP:",left%length
-    do q=1,size(sb_sector)
+    if(MpiMaster)then
+      unit=fopen("sb_shares_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+      write(unit,*)"# STEP:",left%length
+      do q=1,size(sb_sector)
 #ifdef _MPI
-      if(MpiStatus)then
-        write(unit,*)q,Drs(q),mpiDls(q)
-      else
-         write(unit,*)q,Drs(q),Dls(q)
-      endif
+         if(MpiStatus)then
+            write(unit,*)q,Drs(q),Dls(q),mpiDls(q),MpiSize
+         else
+            write(unit,*)q,Drs(q),Dls(q)
+         endif
 #else
-      write(unit,*)q,Drs(q),Dls(q)
+         write(unit,*)q,Drs(q),Dls(q)
 #endif
-    enddo
-    write(unit,*)""
-    flush(unit)
-    close(unit)
-    call Barrier_MPI(MpiComm)
+      enddo
+      write(unit,*)""
+      flush(unit)
+      close(unit)
+    endif
     call sb_delete_dims()
   end subroutine sb_get_shares
 
