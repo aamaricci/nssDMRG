@@ -376,11 +376,12 @@ contains
     !
     if(MpiMaster)then
        write(LOGfile,*)"- - - - - - - - - - - - - - - - - - - - -"
-       select case(left%type())
-       case ("fermion","f")
+       select case(str(to_lower(QNtype(1:1))))
+       case default;stop "DMRG_MAIN error: QNtype != [local,global]"
+       case("l")
           write(LOGfile,"(A,"//str(Lanc_Neigen)//"F24.15)")&
                "Energies/N                           :",gs_energy/sum(current_target_QN)
-       case ("spin","s")
+       case("g")
           write(LOGfile,"(A,"//str(Lanc_Neigen)//"F24.15)")&
                "Energies/L                           :",gs_energy/current_L
        end select

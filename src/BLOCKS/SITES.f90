@@ -393,7 +393,7 @@ logical :: master=.true.
     !Set local H operator
     if(master)write(LOGfile,"(A,I3,A1,I3,A)")&
          "Using Hloc, shape=[",Nspin*Norb,",",Nspin*Norb,"]"
-    call print_matrix(Hloc_)
+    if(master)call print_matrix(Hloc_)
     if(master)write(LOGfile,"(A)")""
     !
     !> Build local Hamiltonian:

@@ -101,12 +101,12 @@ contains
     !
 
     if(master)then
-       write(*,"(A)")"Init Local Fock space:"
-       write(*,"(A,I15)") '# of levels           = ',Ns
-       write(*,"(A,2I15)")'Hilbert dim per spin  = ',Nfocks
-       write(*,"(A,I15)") 'Fock space dimension  = ',Nfock
-       write(*,"(A,I15)") 'Number of sectors     = ',Nsectors
-       write(*,"(A)")"--------------------------------------------"
+       write(LOGfile,"(A)")"Init Local Fock space:"
+       write(LOGfile,"(A,I15)") '# of levels           = ',Ns
+       write(LOGfile,"(A,2I15)")'Hilbert dim per spin  = ',Nfocks
+       write(LOGfile,"(A,I15)") 'Fock space dimension  = ',Nfock
+       write(LOGfile,"(A,I15)") 'Number of sectors     = ',Nsectors
+       write(LOGfile,"(A)")"--------------------------------------------"
        write(LOGfile,"(A)") bg_red('Warning: DIAGONAL HAMILTONIAN OPERATORS only')
     endif
     !
@@ -327,10 +327,14 @@ contains
     real(8)                                 :: sg1,sg2,sg3,sg4
     integer                                 :: nup(Ns),ndw(Ns),nvec(2*Ns)
     logical                                 :: Jcondition
+    logical :: master=.true.
     !
+#ifdef _MPI
+    if(check_MPI())master  = get_master_MPI()
+#endif
 
 #ifdef _CMPLX
-    write(*,*)"Using CMPLX code"
+    if(master)write(*,*)"Using CMPLX code"
     call wait(1000)
 #endif
     !
@@ -998,8 +1002,13 @@ contains
 
   subroutine map_deallocate_scalar(H)
     type(sector_map) :: H
+    logical :: master=.true.
+    !
+#ifdef _MPI
+    if(check_MPI())master  = get_master_MPI()
+#endif
     if(.not.H%status)then
-       write(*,*) "WARNING map_deallocate_scalar: H is not allocated"
+       if(master)write(*,*) "WARNING map_deallocate_scalar: H is not allocated"
        return
     endif
     if(allocated(H%map))deallocate(H%map)
@@ -1027,13 +1036,20 @@ contains
     integer :: dim,i,j,Ntot
     logical :: advance
     integer :: ivec(Ntot)
+    logical :: master=.true.
+    !
+#ifdef _MPI
+    if(check_MPI())master  = get_master_MPI()
+#endif
     ivec = bdecomp(i,Ntot)
-    write(LOGfile,"(A1)",advance="no")"|"
-    write(LOGfile,"(10I1)",advance="no")(ivec(j),j=1,Ntot)
-    if(advance)then
-       write(LOGfile,"(A1)",advance="yes")">"
-    else
-       write(LOGfile,"(A1)",advance="no")">"
+    if(master)then
+      write(LOGfile,"(A1)",advance="no")"|"
+      write(LOGfile,"(10I1)",advance="no")(ivec(j),j=1,Ntot)
+      if(advance)then
+         write(LOGfile,"(A1)",advance="yes")">"
+      else
+         write(LOGfile,"(A1)",advance="no")">"
+      endif
     endif
   end subroutine print_conf
 
