@@ -83,7 +83,7 @@ contains
              Hd = dot%operators%op("H").x.id(self%dim)
              select case(dtype)
              case ("s")     ;H2 = connect_spin_blocks(as_block(dot),self,link=iLink)
-             case ("f","e");H2 = connect_fermion_blocks(as_block(dot),self,link=iLink)
+             case ("f","e") ;H2 = connect_fermion_blocks(as_block(dot),self,link=iLink)
              end select
           end select
        case ("p")  !PBC_prev L:@-[-o...o-o]; R:[o-o...o-]-@
@@ -93,7 +93,7 @@ contains
              Hd = dot%operators%op("H").x.id(self%dim)
              select case(dtype)
              case ("s")     ;H2 = connect_spin_blocks(as_block(dot),self,link=iLink)
-             case ("f","e");H2 = connect_fermion_blocks(as_block(dot),self,link=iLink)
+             case ("f","e") ;H2 = connect_fermion_blocks(as_block(dot),self,link=iLink)
              end select
           case ("r")
              Hb = self%operators%op("H").x.id(dot%dim)
@@ -300,8 +300,8 @@ contains
     character(len=*),optional                 :: link
     character(len=1)                          :: ilink
     type(sparse_matrix),dimension(Nspin*Norb) :: Cl,Cr
-    type(sparse_matrix)                       :: P,A
-    type(sparse_matrix)                       :: H2
+    type(sparse_matrix)                       :: Pl,Pr
+    type(sparse_matrix)                       :: H2,Hh
     integer                                   :: ispin,iorb,jorb,io,jo
     integer,dimension(2)                      :: Hdims,dleft,dright
     character(len=:),allocatable              :: key
@@ -347,29 +347,38 @@ contains
     !
     !
     !>Build H2:
+    ! A = (C_{La}x1_R)^+ 
+    ! B = (P_LxC_{Rb})
+    ! H2 = \sum_{ab} t_{ab}A^+ @B + t*_{ab} B^+ @A
+    ! (AxB)@(CxD)=(A@C)x(B@D) + (AxB)^+=(A^+xB^+)
+    !    = \sum_{ab} t_{ab} (C^+_{La}@P_L)x(1_R@C_{Rb}) 
+    !              + t*_{ab}(P^+_L@C_{La})x(C^+_{Rb}@1_R) 
+    !
+    !P^+ = P ?
     key = "P"//left%okey(0,0,ilink=iLink)
-    P   = left%operators%op(key)  !always acts on the Left Block
+    Pl  = left%operators%op(key)
     do io=1,Nspin*Norb
        do jo=1,Nspin*Norb
           if(Hij(io,jo)==zero)cycle
-          Tr = Hij(io,jo) 
+          Tr = Hij(io,jo)
 #ifdef _CMPLX
-          Tl = conjg(Tr)
+          Tl = conjg(Tr) !== H(jo,io) by Hermiticity
 #else
           Tl = Tr
 #endif
           if(present(states))then
-             H2 = H2 + Tr*sp_kron(matmul(Cl(io)%dgr(),P),Cr(jo),states)
-             H2 = H2 + Tl*sp_kron(matmul(P,Cl(io)),Cr(jo)%dgr(),states)
+             H2 = H2 + Tr*sp_kron(matmul(Cl(io)%dgr(),Pl),Cr(jo),states)
+             H2 = H2 + Tl*sp_kron(matmul(Pl,Cl(io)),Cr(jo)%dgr(),states)
           else
-             H2 = H2 + Tr*(matmul(Cl(io)%dgr(),P).x.Cr(jo))
-             H2 = H2 + Tl*(matmul(P,Cl(io)).x.Cr(jo)%dgr())
+             H2 = H2 + Tr*(matmul(Cl(io)%dgr(),Pl).x.Cr(jo))
+             H2 = H2 + Tl*(matmul(Pl,Cl(io)).x.Cr(jo)%dgr())
           endif
        enddo
     enddo
     !
     !> free memory
-    call P%free
+    call Pl%free
+    call Pr%free
     do io=1,Nspin*Norb
        call Cl(io)%free
        call Cr(io)%free

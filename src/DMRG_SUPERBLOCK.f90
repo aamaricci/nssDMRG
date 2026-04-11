@@ -97,7 +97,7 @@ contains
          call MPI_Comm_split(MpiComm_Global, color, MpiRank, mpiSBCOMM(isb), ierr)
          if(.not.quiet_)then
             if(MpiMaster)then
-               if(verbose>2)write(LOGfile,"(A,I6,A,I6,A,I6,A,I6,A,I6)")"Reducing N_cpu to Nactive:",n_active,&
+               if(verbose>4)write(LOGfile,"(A,I6,A,I6,A,I6,A,I6,A,I6)")"Reducing N_cpu to Nactive:",n_active,&
                " for sector ",isb,"/",Nsb," with Dls=",Dls(isb)," and Drs=",Drs(isb)
                unit=fopen("sb_active_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
                write(unit,*)left%length,isb,Dls(isb),Drs(isb),MpiSize,mpiNactive(isb)
@@ -344,6 +344,12 @@ contains
     integer                               :: vecDim,Nloc,m_tmp
     logical                               :: exist,lanc_solve,fMpi
     real(8) :: EH
+#ifdef _CMPLX
+    complex(8) :: uno=(1.d0,0.d0)
+#else
+    real(8)    :: uno=1.d0
+#endif    
+
     !
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: SuperBlock diagonalization"
@@ -389,6 +395,7 @@ contains
                   Nblock,&
                   Nitermax,&
                   tol=lanc_tolerance,&
+                  vrandom=(.not.lanc_v0_dble),&
                   iverbose=(verbose>4),NumOp=NumOp)
              call Bcast_MPI(MpiComm,gs_energy)
              call scatter_vector_MPI(MpiComm,gs_tmp,gs_vector)
@@ -398,6 +405,7 @@ contains
                   Nblock,&
                   Nitermax,&
                   tol=lanc_tolerance,&
+                  vrandom=(.not.lanc_v0_dble),&
                   iverbose=(verbose>4),NumOp=NumOp)
           endif
        else
@@ -405,6 +413,7 @@ contains
                Nblock,&
                Nitermax,&
                tol=lanc_tolerance,&
+               vrandom=(.not.lanc_v0_dble),&
                iverbose=(verbose>4),NumOp=NumOp)
        endif
 #else
@@ -412,10 +421,12 @@ contains
             Nblock,&
             Nitermax,&
             tol=lanc_tolerance,&
+            vrandom=(.not.lanc_v0_dble),&
             iverbose=(verbose>4),NumOp=NumOp)
 #endif
        if(MpiMaster)call stop_timer("Diag H_sb")
        t_sb_diag=t_stop()
+       !
        !        allocate(gs_tmp,mold=gs_vector)
        !        call spHtimesV_p(vecDim,gs_vector(:,1),gs_tmp(:,1))
        !        EH = dot_product(gs_vector(:,1),  gs_tmp(:,1))

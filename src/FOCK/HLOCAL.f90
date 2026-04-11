@@ -107,7 +107,7 @@ contains
        write(LOGfile,"(A,I15)") 'Fock space dimension  = ',Nfock
        write(LOGfile,"(A,I15)") 'Number of sectors     = ',Nsectors
        write(LOGfile,"(A)")"--------------------------------------------"
-       write(LOGfile,"(A)") bg_red('Warning: DIAGONAL HAMILTONIAN OPERATORS only')
+       !write(LOGfile,"(A)") bg_red('Warning: DIAGONAL HAMILTONIAN OPERATORS only')
     endif
     !
     !Allocate some indexing arrays

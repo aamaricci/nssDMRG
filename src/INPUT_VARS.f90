@@ -79,9 +79,9 @@ MODULE INPUT_VARS
   !or direct on-the-fly H*v product (mem++, cpu--
   integer                      :: verbose
   !Flag to control verbosity of the library
-  character(len=12)            :: lanc_method
-  !select the lanczos method to be used in the determination of the spectrum.
-  !ARPACK (default), LANCZOS (T=0 only) 
+  ! character(len=12)            :: lanc_method
+  ! !select the lanczos method to be used in the determination of the spectrum.
+  ! !ARPACK (default), LANCZOS (T=0 only) 
   real(8)                      :: lanc_tolerance
   !Tolerance for the Lanczos iterations as used in Arpack and plain lanczos. 
   integer                      :: lanc_niter
@@ -99,6 +99,9 @@ MODULE INPUT_VARS
   integer                      :: lanc_dim_threshold
   !Min dimension threshold to use Lanczos determination of the
   !spectrum rather than Lapack based exact diagonalization.
+  logical                      :: lanc_v0_dble
+  !Set the initial vector used in Arpack to be identical to 1d0/N. This is an experimental feature
+  !used to enforce: i) the same starting point, ii) Hermiticity breaking in CMPLX code
   logical                      :: save_umat
   !flag to save Rotation matrices, default=T
   logical                      :: save_block
@@ -265,8 +268,8 @@ contains
          comment="Sparse H*v: True = allocate sparse; False=direct product using QN decomposition")
     !
     !> Lanczos parameters:
-    call parse_input_variable(lanc_method,"LANC_METHOD",INPUTunit,default="arpack",&
-         comment="select the lanczos method: ARPACK (default), LANCZOS (T=0 only)")
+    ! call parse_input_variable(lanc_method,"LANC_METHOD",INPUTunit,default="arpack",&
+    !      comment="select the lanczos method: ARPACK (default), LANCZOS (T=0 only)")
     call parse_input_variable(lanc_neigen,"LANC_NEIGEN",INPUTunit,default=2,&
          comment="Number of states per SB sector to be determined.")
     call parse_input_variable(lanc_ncv_factor,"LANC_NCV_FACTOR",INPUTunit,default=10,&
@@ -281,6 +284,8 @@ contains
          comment="Tolerance for the Lanczos iterations as used in Arpack and plain lanczos.")
     call parse_input_variable(lanc_dim_threshold,"LANC_DIM_THRESHOLD",INPUTunit,&
          default=1024,comment="Dimension threshold for Lapack use.")
+    call parse_input_variable(lanc_v0_dble,"LANC_V0_dble",INPUTunit,default=.true.,&
+         comment="Set the initial vector in Arpack to 1d0/N. Experimental feature ensuring i) same starting point, ii) fix Hermiticity breaking in CMPLX code")
     !
     !>Save Blocks tuning:
     call parse_input_variable(save_umat,"SAVE_UMAT",INPUTunit,default=.true.,&

@@ -135,7 +135,7 @@ contains
        allocate(rho(nright,nright));rho=zero
        rho  = transpose(matmul( conjg(transpose(psi_tmp)), psi_tmp  ))
     end select
-    if(any(abs(rho-conjg(transpose(rho)))/=0d0))&
+    if(any(abs(rho-conjg(transpose(rho)))>1d-12))&
          stop "build_density_matrix error: rho not Hermitian"
 #else
     select case(to_lower(str(direction)))
