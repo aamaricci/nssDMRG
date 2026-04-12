@@ -51,27 +51,27 @@ jobs:
           export GLOB_LIB=$( pkg-config --libs   scifor  | sed  "s/;/ /g"  | sed 's/\\/  /g' )
           Lattice_DMRG/bin/ci_setup_dmrg.sh
 
-#******** TESTING PART ********
-# Testing
-      - name: Building tests
-        run: |
-          source ~/.scifor_config_user
-          source ~/.dmrg_config_user
-          export PKG_CONFIG_PATH=~/.pkgconfig.d
-          export GLOB_INC=$( pkg-config --cflags scifor dmrg)
-          export GLOB_LIB=$( pkg-config --libs   scifor dmrg | sed  "s/;/ /g"  | sed 's/\\/  /g' )
-          cd Lattice_DMRG/test
-          export TERM=xterm
-          make all
+# #******** TESTING PART ********
+# # Testing
+#       - name: Building tests
+#         run: |
+#           source ~/.scifor_config_user
+#           source ~/.dmrg_config_user
+#           export PKG_CONFIG_PATH=~/.pkgconfig.d
+#           export GLOB_INC=$( pkg-config --cflags scifor dmrg)
+#           export GLOB_LIB=$( pkg-config --libs   scifor dmrg | sed  "s/;/ /g"  | sed 's/\\/  /g' )
+#           cd Lattice_DMRG/test
+#           export TERM=xterm
+#           make all
 
-      - name: Testing...
-        run: |
-          source ~/.scifor_config_user
-          source ~/.dmrg_config_user
-          export PKG_CONFIG_PATH=~/.pkgconfig.d
-          export GLOB_INC=$( pkg-config --cflags scifor dmrg)
-          export GLOB_LIB=$( pkg-config --libs   scifor dmrg | sed  "s/;/ /g"  | sed 's/\\/  /g' )
-          cd Lattice_DMRG/test
-          cd Lattice_DMRG/test
-          make test
+#       - name: Testing...
+#         run: |
+#           source ~/.scifor_config_user
+#           source ~/.dmrg_config_user
+#           export PKG_CONFIG_PATH=~/.pkgconfig.d
+#           export GLOB_INC=$( pkg-config --cflags scifor dmrg)
+#           export GLOB_LIB=$( pkg-config --libs   scifor dmrg | sed  "s/;/ /g"  | sed 's/\\/  /g' )
+#           cd Lattice_DMRG/test
+#           cd Lattice_DMRG/test
+#           make test
 

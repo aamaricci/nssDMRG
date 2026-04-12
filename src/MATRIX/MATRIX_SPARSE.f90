@@ -208,7 +208,7 @@ MODULE MATRIX_SPARSE
   public :: matmul
   public :: sp_eye
   public :: sp_filter
-  public :: sp_add3
+  ! public :: sp_add3
 #ifdef _MPI
   public :: operator(.pm.)
   public :: AllGather_MPI
