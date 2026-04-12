@@ -104,7 +104,7 @@ contains
              end select
           end select
        end select
-       call self%put_op("H", sp_add3(Hb,Hd,H2), type="bosonic")
+       call self%put_op("H", Hb+Hd+H2, type="bosonic")
        write(LOGfile,*)"Build&Put H*",t_stop()
        !
        !

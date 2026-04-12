@@ -284,7 +284,7 @@ contains
          comment="Tolerance for the Lanczos iterations as used in Arpack and plain lanczos.")
     call parse_input_variable(lanc_dim_threshold,"LANC_DIM_THRESHOLD",INPUTunit,&
          default=1024,comment="Dimension threshold for Lapack use.")
-    call parse_input_variable(lanc_v0_dble,"LANC_V0_dble",INPUTunit,default=.true.,&
+    call parse_input_variable(lanc_v0_dble,"LANC_V0_dble",INPUTunit,default=.false.,&
          comment="Set the initial vector in Arpack to 1d0/N. Experimental feature ensuring i) same starting point, ii) fix Hermiticity breaking in CMPLX code")
     !
     !>Save Blocks tuning:

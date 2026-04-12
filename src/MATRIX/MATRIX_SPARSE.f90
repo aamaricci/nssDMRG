@@ -178,10 +178,10 @@ MODULE MATRIX_SPARSE
      module procedure :: sp_filter_matrix_2
   end interface sp_filter
 
-  interface sp_add3
-     module procedure :: sp_plus3_matrix
-  end interface sp_add3
-  
+  ! interface sp_add3
+  !    module procedure :: sp_plus3_matrix
+  ! end interface sp_add3
+
 #ifdef _MPI
   interface  AllGather_MPI
      module procedure ::  sp_array_all_gather_1
@@ -1349,100 +1349,101 @@ contains
 
 
 
-  ! Merge three sparse matrices a, b, c into d in one rowwise pass.
-  function sp_plus3_matrix(a,b,c) result(d)
-    type(sparse_matrix), intent(in) :: a,b,c
-    type(sparse_matrix)             :: d
-    integer                         :: i, na, nb, nc, p, q, r, nn
-    integer                         :: ca, cb, cc
-    real(8)                         :: sumv
-    integer, allocatable            :: cols(:)
-#ifdef _CMPLX
-    complex(8), allocatable         :: vals(:)
-    complex(8)                      :: va, vb, vc
-#else
-    real(8), allocatable            :: vals(:)
-    real(8)                         :: va, vb, vc
-#endif
-    if(.not.a%status .or. .not.b%status .or. .not.c%status) stop "sp_plus3_matrix: status error"
-    if(a%Nrow /= b%Nrow .or. a%Nrow /= c%Nrow) stop "sp_plus3_matrix: Nrow mismatch"
-    if(a%Ncol /= b%Ncol .or. a%Ncol /= c%Ncol) stop "sp_plus3_matrix: Ncol mismatch"
-    !
-    call d%free()
-    call d%init(a%Nrow, a%Ncol)
-    !
-    do i = 1, a%Nrow
-       na = a%row(i)%size; nb = b%row(i)%size; nc = c%row(i)%size
-       if(na+nb+nc == 0) cycle
-       ! allocate worst-case once for this row
-       allocate(cols(na+nb+nc))
-       allocate(vals(na+nb+nc))
-       !
-       p = 1
-       q = 1
-       r = 1
-       nn = 0
-       !
-       do while(p<=na .or. q<=nb .or. r<=nc)
-          !
-          ca = huge(1)
-          cb = huge(1)
-          cc = huge(1)
-          if(p<=na) ca = a%row(i)%cols(p)
-          if(q<=nb) cb = b%row(i)%cols(q)
-          if(r<=nc) cc = c%row(i)%cols(r)
-          !
-          if(ca <= cb .AND. ca <= cc) then
-             va   = a%row(i)%vals(p)
-             sumv = va
-             if(cb == ca) then
-                sumv = sumv + b%row(i)%vals(q)
-                q = q+1
-             endif
-             if(cc == ca) then
-                sumv = sumv + c%row(i)%vals(r)
-                r = r+1
-             endif
-             p = p + 1
-             if(abs(sumv)>1d-16)then
-                nn = nn + 1
-                cols(nn) = ca
-                vals(nn) = sumv
-             endif
-          elseif(cb <= ca .AND. cb <= cc) then
-             vb   = b%row(i)%vals(q)
-             sumv = vb
-             if(cc == cb) then
-                sumv = sumv + c%row(i)%vals(r)
-                r = r+1
-             end if
-             q = q + 1
-             if(abs(sumv)>1d-16) then
-                nn = nn + 1
-                cols(nn) = cb
-                vals(nn) = sumv
-             endif
-          else
-             vc   = c%row(i)%vals(r)
-             sumv = vc
-             r = r + 1
-             if(abs(sumv)>1d-16) then
-                nn = nn + 1
-                cols(nn) = cc
-                vals(nn) = sumv
-             end if
-          end if
-       end do
-       !
-       d%row(i)%size = nn
-       if(nn > 0) then
-          call append(d%row(i)%cols, cols(1:nn))
-          call append(d%row(i)%vals, vals(1:nn))
-       end if
-       deallocate(cols, vals)
-       !
-    end do
-  end function sp_plus3_matrix
+! This is not WORKING WELL
+!   ! Merge three sparse matrices a, b, c into d in one rowwise pass.
+!   function sp_plus3_matrix(a,b,c) result(d)
+!     type(sparse_matrix), intent(in) :: a,b,c
+!     type(sparse_matrix)             :: d
+!     integer                         :: i, na, nb, nc, p, q, r, nn
+!     integer                         :: ca, cb, cc
+!     real(8)                         :: sumv
+!     integer, allocatable            :: cols(:)
+! #ifdef _CMPLX
+!     complex(8), allocatable         :: vals(:)
+!     complex(8)                      :: va, vb, vc
+! #else
+!     real(8), allocatable            :: vals(:)
+!     real(8)                         :: va, vb, vc
+! #endif
+!     if(.not.a%status .or. .not.b%status .or. .not.c%status) stop "sp_plus3_matrix: status error"
+!     if(a%Nrow /= b%Nrow .or. a%Nrow /= c%Nrow) stop "sp_plus3_matrix: Nrow mismatch"
+!     if(a%Ncol /= b%Ncol .or. a%Ncol /= c%Ncol) stop "sp_plus3_matrix: Ncol mismatch"
+!     !
+!     call d%free()
+!     call d%init(a%Nrow, a%Ncol)
+!     !
+!     do i = 1, a%Nrow
+!        na = a%row(i)%size; nb = b%row(i)%size; nc = c%row(i)%size
+!        if(na+nb+nc == 0) cycle
+!        ! allocate worst-case once for this row
+!        allocate(cols(na+nb+nc))
+!        allocate(vals(na+nb+nc))
+!        !
+!        p = 1
+!        q = 1
+!        r = 1
+!        nn = 0
+!        !
+!        do while(p<=na .or. q<=nb .or. r<=nc)
+!           !
+!           ca = huge(1)
+!           cb = huge(1)
+!           cc = huge(1)
+!           if(p<=na) ca = a%row(i)%cols(p)
+!           if(q<=nb) cb = b%row(i)%cols(q)
+!           if(r<=nc) cc = c%row(i)%cols(r)
+!           !
+!           if(ca <= cb .AND. ca <= cc) then
+!              va   = a%row(i)%vals(p)
+!              sumv = va
+!              if(cb == ca) then
+!                 sumv = sumv + b%row(i)%vals(q)
+!                 q = q+1
+!              endif
+!              if(cc == ca) then
+!                 sumv = sumv + c%row(i)%vals(r)
+!                 r = r+1
+!              endif
+!              p = p + 1
+!              if(abs(sumv)>1d-16)then
+!                 nn = nn + 1
+!                 cols(nn) = ca
+!                 vals(nn) = sumv
+!              endif
+!           elseif(cb <= ca .AND. cb <= cc) then
+!              vb   = b%row(i)%vals(q)
+!              sumv = vb
+!              if(cc == cb) then
+!                 sumv = sumv + c%row(i)%vals(r)
+!                 r = r+1
+!              end if
+!              q = q + 1
+!              if(abs(sumv)>1d-16) then
+!                 nn = nn + 1
+!                 cols(nn) = cb
+!                 vals(nn) = sumv
+!              endif
+!           else
+!              vc   = c%row(i)%vals(r)
+!              sumv = vc
+!              r = r + 1
+!              if(abs(sumv)>1d-16) then
+!                 nn = nn + 1
+!                 cols(nn) = cc
+!                 vals(nn) = sumv
+!              end if
+!           end if
+!        end do
+!        !
+!        d%row(i)%size = nn
+!        if(nn > 0) then
+!           call append(d%row(i)%cols, cols(1:nn))
+!           call append(d%row(i)%vals, vals(1:nn))
+!        end if
+!        deallocate(cols, vals)
+!        !
+!     end do
+!   end function sp_plus3_matrix
 
 
 
