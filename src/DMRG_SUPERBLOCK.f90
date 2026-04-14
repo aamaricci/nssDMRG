@@ -99,7 +99,7 @@ contains
             if(MpiMaster)then
                if(verbose>4)write(LOGfile,"(A,I6,A,I6,A,I6,A,I6,A,I6)")"Reducing N_cpu to Nactive:",n_active,&
                " for sector ",isb,"/",Nsb," with Dls=",Dls(isb)," and Drs=",Drs(isb)
-               unit=fopen("sb_active_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+               unit=fopen("sb_active_"//to_lower(DMRGtype)//"DMRG.dmrg",append=.true.)
                write(unit,*)left%length,isb,Dls(isb),Drs(isb),MpiSize,mpiNactive(isb)
                flush(unit)
                close(unit)
@@ -302,7 +302,7 @@ contains
     integer :: unit,q,irank
     call sb_build_dims(quiet=.true.)
     if(MpiMaster)then
-      unit=fopen("sb_shares_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+      unit=fopen("sb_shares_"//to_lower(DMRGtype)//"DMRG.dmrg",append=.true.)
       write(unit,*)"# STEP:",left%length
       do q=1,size(sb_sector)
 #ifdef _MPI

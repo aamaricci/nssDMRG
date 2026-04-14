@@ -845,7 +845,7 @@ contains
     call append_profile("time_dmrg_step",t_dmrg_step)
     !
     if(MpiMaster)then
-       unit=fopen("full_profile_"//to_lower(DMRGtype)//"DMRG.out",append=.true.)
+       unit=fopen("full_profile_"//to_lower(DMRGtype)//"DMRG.dmrg",append=.true.)
        write(unit,*)"# STEP:",left%length
        do i=1,size(prof_times)
           write(unit,*)prof_names(i),prof_times(i)

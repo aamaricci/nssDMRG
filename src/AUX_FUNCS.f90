@@ -523,17 +523,21 @@ contains
     integer          :: unit
     logical          :: append_,bool
     append_=.true.;if(present(append))append_=append
+    inquire(file=str(fname), exist=bool)
+    unit = free_unit()
     select case(append_)
     case (.true.)    
-       inquire(file=str(fname), exist=bool)
-       unit = free_unit()
        if (bool) then
           open(unit,file=str(fname),status="old",position="append",action="write")
        else
           open(unit,file=str(fname),status="new",action="write")
        end if
     case(.false.)
-       open(unit,file=str(fname),status="new",action="write")
+      if (bool) then
+         open(unit,file=str(fname),status="old",action="write")
+      else  
+         open(unit,file=str(fname),status="new",action="write")
+      end if
     end select
   end function fopen
 

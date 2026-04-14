@@ -191,7 +191,7 @@ contains
        if(MpiMaster)then
           call start_timer("Diag rho "//to_lower(str(label)));
           t0=t_start()
-          call rho_left%eigh(sort=.true.,reverse=.true.)
+          call rho_left%eigh(sort=.true.,reverse=.true.,file=str(lambdaQ_file)//"_"//str(label)//".dmrg")
           t_rdm_diag=t_rdm_diag+t_stop()
           call stop_timer("Diag rho "//to_lower(str(label)))
           !
@@ -273,7 +273,7 @@ contains
        !
        if(MpiMaster)then
           call start_timer("Diag rho "//to_lower(str(label)));t0=t_start()
-          call rho_right%eigh(sort=.true.,reverse=.true.)
+          call rho_right%eigh(sort=.true.,reverse=.true.,file=str(lambdaQ_file)//"_"//str(label)//".dmrg")
           call stop_timer("Diag rho "//to_lower(str(label)));t_rdm_diag=t_rdm_diag+t_stop()
           !
           if(allocated(rho_right_evals))deallocate(rho_right_evals)

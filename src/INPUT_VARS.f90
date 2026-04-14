@@ -114,7 +114,8 @@ MODULE INPUT_VARS
   !Name prefix of the stored Umatrix file, used to restart DMRG.
   character(len=:),allocatable :: block_file
   !Name prefix of the stored block file, used to restart DMRG.
-
+  character(len=:),allocatable :: lambdaQ_file   
+  !Name of the prefix of the stored symmetry resolved RDMs eigenvalues file. 
   !
   !Some parameters for function dimension:
   !=========================================================
@@ -145,6 +146,7 @@ contains
     character(len=*) :: INPUTunit
     character(len=256) :: block_file_
     character(len=256) :: umat_file_
+    character(len=256) :: lambdaQ_file_
     logical          :: master=.true.
     integer          :: i,rank=0,add,dim
 #ifdef _MPI
@@ -305,6 +307,10 @@ contains
     call parse_input_variable(block_file_,"BLOCK_FILE",INPUTunit,default='block',&
          comment="Name prefix of the stored block file, used to restart DMRG.")
     block_file=str(block_file_)
+    call parse_input_variable(lambdaQ_file_,"LAMBDAQ_FILE",INPUTunit,default='lambdaQ',&
+         comment="Name of the prefix of the stored symmetry resolved RDMs eigenvalues file. ")
+    lambdaQ_file=str(lambdaQ_file_)
+
     !
     !
     !    

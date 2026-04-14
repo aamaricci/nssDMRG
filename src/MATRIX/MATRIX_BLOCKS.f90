@@ -581,23 +581,25 @@ contains
   ! the EigenVectors matrix overwrites the block and the EigenValues
   ! are stored in the array E of the block (so far unused). 
   !+------------------------------------------------------------------+
-  subroutine eigh_blocks_matrix(self,sort,reverse,order,Dqn)
+  subroutine eigh_blocks_matrix(self,sort,reverse,order,Dqn,file)
     class(blocks_matrix),intent(inout)        :: self
     logical,optional                          :: sort,reverse
-    integer,optional                          :: Dqn
     integer,dimension(:),allocatable,optional :: order
+    integer,optional                          :: Dqn
+    character(len=*),optional                 :: file
     logical                                   :: sort_,reverse_
     integer                                   :: Dqn_
     real(8),dimension(:),allocatable          :: Rtmp
     integer,dimension(:),allocatable          :: Itmp
     type(block_type),pointer                  :: c
-    integer                                   :: i,Nloc,Offset,N
+    integer                                   :: i,Nloc,Offset,N,unit,count
     real(8) :: block_weight
     !
     sort_   =.true.            ;if(present(sort))sort_=sort
     reverse_=.true.            ;if(present(reverse))reverse_=reverse
     Dqn_    =QNtruncation_dim  ;if(present(Dqn))Dqn_=Dqn
-    !
+    if(present(file))unit=fopen(str(file),.false.)
+
     N = self%Nrow
     if(N/=self%Ncol)print*,"WARNING eigh blocks matrix: self is not square"
     if(allocated(self%evalues))deallocate(self%evalues)
@@ -606,9 +608,11 @@ contains
     allocate(self%eorder(N));self%eorder=0
     !
     Offset=0
+    Count =0
     c => self%root%next
     do                          !loop over all blocks
        if(.not.associated(c))exit
+       count = count + 1
        Nloc = size(c%M,1)
        if(any(shape(c%M)/=[Nloc,Nloc]))stop "eigh block matrix ERROR: local block is not square"
        if(allocated(c%E))deallocate(c%E)
@@ -620,6 +624,13 @@ contains
        block_weight=sum(c%E)
        if( block_weight < QNtruncation_error .OR. Nloc<Dqn_ )c%E=tiny(1d0)
        where(c%E<0d0)c%E=tiny(1d0)
+       !
+       if(present(file))then
+         write(unit,*)count,Nloc
+         do i=1,Nloc
+            write(unit,*)c%E(i)
+         enddo 
+       endif
        !
        self%evalues(Offset+1:Offset+Nloc) = c%E
        Offset = Offset + Nloc
@@ -643,6 +654,7 @@ contains
        if(allocated(order))deallocate(order)
        allocate(order, source=self%eorder)
     endif
+    if(present(file))close(unit)
     !
     self%diag=.true.
     !
