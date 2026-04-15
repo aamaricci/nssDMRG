@@ -16,7 +16,6 @@ MODULE DMRG_MAIN
 contains
 
 
-
   !##################################################################
   !              INIT DMRG ALGORITHM
   !##################################################################
@@ -389,7 +388,7 @@ contains
     endif
     !
     !#################################
-    !      BUILD RDM
+    !      BUILD/DIAG RDM
     !#################################
     !In DMRG_RDM:
     call sb_get_rdm()
@@ -427,7 +426,9 @@ contains
     !
     !Clean memory:
     call spHsb%free()
-    !
+    call rho_left%free()
+    call rho_right%free()
+    !...
     return
   end subroutine step_dmrg
 
@@ -463,7 +464,7 @@ contains
     integer                   :: current_L
     integer                   :: Eunit
     current_L = left%length + right%length
-    Eunit     = fopen("energyVSleft.length"//str(suffix),append=.true.)
+    Eunit     = fopen("energyVSblock.length"//str(suffix),append=.true.)
     write(Eunit,*)left%length,gs_energy/current_L/Norb,right%length
     close(Eunit)
   end subroutine write_energy
@@ -476,7 +477,7 @@ contains
     integer                   :: current_L
     integer                   :: Eunit
     current_L = left%length + right%length
-    Eunit     = fopen("truncationVSleft.length"//str(suffix),append=.true.)
+    Eunit     = fopen("truncationVSblock.length"//str(suffix),append=.true.)
     write(Eunit,*)left%length,&
          truncation_error_left/current_L/Norb,&
          truncation_error_right/current_L/Norb,right%length
@@ -486,19 +487,77 @@ contains
 
   !-----------------------------------------------------------------!
   ! Purpose: write entanglement entropy to file
+  !Get 
+  !    S= -\sum_qi \lambda_q(i)log \lambda_q(i) 
+  !and  
+  !    S= S_N + S_c
+  !Given:
+  !Pq = sum_i \lambda_q(i)
+  !Sq = \sum_i \lambda_q(i)/P_q \log \lambda_q(i)/P_q
+  !
+  !S_N = -\sum_q P_q \log P_q
+  !S_c = \sum_q P_q S_q
   !-----------------------------------------------------------------!
   subroutine write_entanglement()
-    integer :: Eunit,i
-    real(8) :: entropy
+    integer             :: Eunit,i,q
+    real(8)             :: entropyL,entropyR,SnL,SnR,ScL,ScR 
+    type(sparse_matrix) :: LeftQ,RightQ
+    real(8)             :: epsi=1d-32,uno=1d0
+    real(8),dimension(:),allocatable :: PLq,PRq,SLq,SRq,ovals
     !
-    entropy=0d0
-    if(.not.allocated(rho_left_evals))return
+    if(.not.rho_left%status().OR..not.rho_right%status())return
+    !
+    !Get S = - \sum_i \lambda_i \log \lambda_i
+    entropyL = 0d0
+    entropyR = 0d0
     do i=1,size(rho_left_evals)
-       if(rho_left_evals(i)<=0d0)cycle
-       entropy = entropy-rho_left_evals(i)*log(rho_left_evals(i))
+       entropyL = entropyL-rho_left_evals(i)*log(rho_left_evals(i)+epsi)
     enddo
-    Eunit     = fopen("SentropyVSleft.length"//str(suffix),append=.true.)
-    write(Eunit,*)left%length,entropy,right%length
+    do i=1,size(rho_right_evals)
+       entropyR = entropyR-rho_right_evals(i)*log(rho_right_evals(i)+epsi)
+    enddo
+    Eunit     = fopen("SentropyVSblock.length"//str(suffix),append=.true.)
+    write(Eunit,*)left%length,entropyL,entropyR,right%length
+    close(Eunit)
+    !
+    !Get S_N and S_c
+    LeftQ = rho_left%lambda()
+    Eunit=fopen("LambdaQ_left"//str(suffix),append=.false.)
+    do q=1,LeftQ%Nrow
+      call append(PLq,sum(dble(LeftQ%row(q)%vals)))
+      allocate(ovals ,source=dble(LeftQ%row(q)%vals)/PLq(q))
+      call append(SLq,sum( ovals*log(ovals+epsi)))      
+      deallocate(ovals)
+      !Print \lambda_q(i)
+      write(Eunit,*)q,LeftQ%row(q)%size
+      do i=1,LeftQ%row(q)%size
+         write(Eunit,*)LeftQ%row(q)%vals(i)
+      enddo
+    enddo
+    close(Eunit)
+    !
+    !
+    RightQ = rho_right%lambda()
+    Eunit=fopen("LambdaQ_right"//str(suffix),append=.false.)
+    do q=1,RightQ%Nrow
+      call append(PRq,sum(dble(RightQ%row(q)%vals)))
+      allocate(ovals ,source=dble(RightQ%row(q)%vals)/PRq(q))
+      call append(SRq,sum( ovals*log(ovals+epsi)))
+      deallocate(ovals)
+      !Print \lambda_q(i)
+      write(Eunit,*)"",q,RightQ%row(q)%size
+      do i=1,RightQ%row(q)%size
+         write(Eunit,*)RightQ%row(q)%vals(i)
+      enddo
+    enddo
+    close(Eunit)
+    !
+    SnL   = -sum(PLq*log(PLq+epsi))  
+    SnR   = -sum(PRq*log(PRq+epsi))
+    ScL   = -sum(PLq*SLq)
+    ScR   = -sum(PRq*SRq)
+    Eunit = fopen("SN_ScVSblock.length"//str(suffix),append=.true.)
+    write(Eunit,*)left%length,SnL,ScL,SnR,ScR,right%length
     close(Eunit)
   end subroutine write_entanglement
 

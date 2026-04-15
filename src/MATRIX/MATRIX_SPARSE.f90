@@ -691,7 +691,7 @@ contains
        Ns = size(sparse%row(i)%cols)
        if(Ns==0)cycle
        do j=1,Ns
-          write(unit_,"(A1,2I5,A1,2F8.3)",advance='no')"[",i,sparse%row(i)%cols(j),"]",sparse%row(i)%vals(j)
+          write(unit_,"(A1,2I5,A1,2ES10.3,3X)",advance='no')"[",i,sparse%row(i)%cols(j),"]",sparse%row(i)%vals(j)
        enddo
        write(unit_,"(A1)",advance='yes')""
        write(unit_,*)

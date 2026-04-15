@@ -39,11 +39,13 @@ MODULE MATRIX_BLOCKS
      procedure,pass :: qn     => get_qn_blocks_matrix
      procedure,pass :: map    => get_map_blocks_matrix
      procedure,pass :: index  => get_index_blocks_matrix
+     procedure,pass :: status => status_blocks_matrix
      !
      procedure,pass :: eigh   => eigh_blocks_matrix
      procedure,pass :: evals  => evals_blocks_matrix
      procedure,pass :: eval   => eval_blocks_matrix
      procedure,pass :: evec   => evec_blocks_matrix
+     procedure,pass :: lambda => get_evals_blocks_matrix
      !
      procedure,pass :: has_qn => has_qn_blocks_matrix
      procedure,pass :: dump   => dump_blocks_matrix
@@ -199,8 +201,11 @@ contains
 
 
 
-
-
+  function status_blocks_matrix(self) result(bool)
+    class(blocks_matrix),intent(in) :: self
+    logical                         :: bool
+    bool = associated(self%root)
+  end function status_blocks_matrix  
 
   !##################################################################
   !##################################################################
@@ -581,12 +586,11 @@ contains
   ! the EigenVectors matrix overwrites the block and the EigenValues
   ! are stored in the array E of the block (so far unused). 
   !+------------------------------------------------------------------+
-  subroutine eigh_blocks_matrix(self,sort,reverse,order,Dqn,file)
+  subroutine eigh_blocks_matrix(self,sort,reverse,order,Dqn)
     class(blocks_matrix),intent(inout)        :: self
     logical,optional                          :: sort,reverse
     integer,dimension(:),allocatable,optional :: order
     integer,optional                          :: Dqn
-    character(len=*),optional                 :: file
     logical                                   :: sort_,reverse_
     integer                                   :: Dqn_
     real(8),dimension(:),allocatable          :: Rtmp
@@ -598,7 +602,6 @@ contains
     sort_   =.true.            ;if(present(sort))sort_=sort
     reverse_=.true.            ;if(present(reverse))reverse_=reverse
     Dqn_    =QNtruncation_dim  ;if(present(Dqn))Dqn_=Dqn
-    if(present(file))unit=fopen(str(file),.false.)
 
     N = self%Nrow
     if(N/=self%Ncol)print*,"WARNING eigh blocks matrix: self is not square"
@@ -625,12 +628,6 @@ contains
        if( block_weight < QNtruncation_error .OR. Nloc<Dqn_ )c%E=tiny(1d0)
        where(c%E<0d0)c%E=tiny(1d0)
        !
-       if(present(file))then
-         write(unit,*)count,Nloc
-         do i=1,Nloc
-            write(unit,*)c%E(i)
-         enddo 
-       endif
        !
        self%evalues(Offset+1:Offset+Nloc) = c%E
        Offset = Offset + Nloc
@@ -654,12 +651,37 @@ contains
        if(allocated(order))deallocate(order)
        allocate(order, source=self%eorder)
     endif
-    if(present(file))close(unit)
     !
     self%diag=.true.
     !
   end subroutine eigh_blocks_matrix
 
+
+  function get_evals_blocks_matrix(self)  result(Es)
+    class(blocks_matrix)     :: self
+    type(sparse_matrix)      :: Es
+    type(block_type),pointer :: c
+#ifdef _CMPLX
+    complex(8)               :: uno=(1d0,0d0)
+#else
+    real(8)                  :: uno=1d0
+#endif      
+    integer                  :: N,M,Nloc,i,q
+    !
+    if(.not.self%diag)stop "Get_evals_blocks_matrix error: self.diag=F, call self.eigh() before trying to get an eigenvector"
+    !
+    N = size(self) !Number of blocks
+    M = maxval(self%dims())
+    call Es%init(N,M)
+    c => self%root
+    do q=1,N
+       c => c%next
+       do i=1,size(c%E)
+         call Es%fast_insert(uno*c%E(i),q,i)
+       enddo  
+    enddo    
+    c=>null()    
+  end function get_evals_blocks_matrix
 
 
   !+------------------------------------------------------------------+
