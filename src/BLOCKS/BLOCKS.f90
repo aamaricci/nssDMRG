@@ -543,14 +543,20 @@ contains
     class(block)     :: self
     character(len=*) :: suffix
     logical          :: bool,gzbool
+    logical :: master=.true.
+    !
+#ifdef _MPI
+    if(check_MPI())master  = get_master_MPI()
+#endif
+    !
     !Check if block_file exists:
     inquire(file=str(block_file)//str(suffix), exist=bool)
     if(.not.bool)return
-    write(LOGfile,*)"Loading from: "//str(block_file)//str(suffix)
+    if(master)write(LOGfile,*)"Loading from: "//str(block_file)//str(suffix)
     !
     !Check if umat_file exists:
     inquire(file=str(umat_file)//str(suffix), exist=bool)
-    if(bool)write(LOGfile,*)"Loading from: "//str(umat_file)//str(suffix)
+    if(bool.and.master)write(LOGfile,*)"Loading from: "//str(umat_file)//str(suffix)
     !
     call self%read(str(suffix))
     !
