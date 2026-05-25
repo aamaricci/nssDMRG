@@ -1101,7 +1101,7 @@ contains
     real(8),dimension(Nloc)               :: Hv
     real(8)                               :: val
 #endif
-    type(sparse_matrix)                   :: Hlk,Hrk,Aop,Bop,tmpOp
+    type(sparse_matrix)                   :: Hlk,Hrk,Aop,Bop
     real(8),dimension(:),allocatable      :: qn,qm,dq,qnup,qndw
     character(len=:),allocatable          :: type
     integer                               :: k,q,ir,il,jr,jl,jcol,i,j
@@ -1151,9 +1151,7 @@ contains
              Aop = HopH(2,2)*filter_left_operator(Lazy_Sl_n(2),k,q)
              Bop = filter_right_operator(hconjg(Lazy_Sr_n(2)),k,q)
              call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
-             tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
-             tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
-             call apply_AxB_direct(Aop,Bop,Offset(q),Offset(k),v,Hv)
+             call apply_AxB_direct(hconjg(Aop),hconjg(Bop),Offset(q),Offset(k),v,Hv)
              call Aop%free();call Bop%free()
           endif
           if(PBCdmrg)then
@@ -1167,9 +1165,7 @@ contains
                 Aop = HopH(2,2)*filter_left_operator(Lazy_Sl_p(2),k,q)
                 Bop = filter_right_operator(hconjg(Lazy_Sr_p(2)),k,q)
                 call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
-                tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
-                tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
-                call apply_AxB_direct(Aop,Bop,Offset(q),Offset(k),v,Hv)
+                call apply_AxB_direct(hconjg(Aop),hconjg(Bop),Offset(q),Offset(k),v,Hv)
                 call Aop%free();call Bop%free()
              endif
           endif
@@ -1200,17 +1196,13 @@ contains
                    Aop = HopH(io,jo)*filter_left_operator(Lazy_CdgP_n(io),k,q)
                    Bop = filter_right_operator(Lazy_Cr_n(jo),k,q)
                    call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
-                   tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
-                   tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
-                   call apply_AxB_direct(Aop,Bop,Offset(q),Offset(k),v,Hv)
+                   call apply_AxB_direct(hconjg(Aop),hconjg(Bop),Offset(q),Offset(k),v,Hv)
                    call Aop%free();call Bop%free()
                    if(PBCdmrg)then
                       Aop = HopH(io,jo)*filter_left_operator(Lazy_CdgP_p(io),k,q)
                       Bop = filter_right_operator(Lazy_Cr_p(jo),k,q)
                       call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
-                      tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
-                      tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
-                      call apply_AxB_direct(Aop,Bop,Offset(q),Offset(k),v,Hv)
+                      call apply_AxB_direct(hconjg(Aop),hconjg(Bop),Offset(q),Offset(k),v,Hv)
                       call Aop%free();call Bop%free()
                    endif
                 enddo
@@ -1237,7 +1229,7 @@ contains
     real(8),dimension(:),allocatable      :: vt,Hvt
     real(8)                               :: val
 #endif
-    type(sparse_matrix)                   :: Hlk,Hrk,Aop,Bop,tmpOp
+    type(sparse_matrix)                   :: Hlk,Hrk,Aop,Bop
     real(8),dimension(:),allocatable      :: qn,qm,dq,qnup,qndw
     character(len=:),allocatable          :: type
     integer                               :: k,q,ir,il,jr,jl,jcol,i,j
@@ -1298,9 +1290,7 @@ contains
              Aop = HopH(2,2)*filter_left_operator(Lazy_Sl_n(2),k,q)
              Bop = filter_right_operator(hconjg(Lazy_Sr_n(2)),k,q)
              call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
-             tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
-             tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
-             call apply_AxB_MPI_direct(Aop,Bop,k,q,1,v,Hv)
+             call apply_AxB_MPI_direct(hconjg(Aop),hconjg(Bop),k,q,1,v,Hv)
              call Aop%free();call Bop%free()
           endif
           if(PBCdmrg)then
@@ -1314,9 +1304,7 @@ contains
                 Aop = HopH(2,2)*filter_left_operator(Lazy_Sl_p(2),k,q)
                 Bop = filter_right_operator(hconjg(Lazy_Sr_p(2)),k,q)
                 call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
-                tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
-                tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
-                call apply_AxB_MPI_direct(Aop,Bop,k,q,1,v,Hv)
+                call apply_AxB_MPI_direct(hconjg(Aop),hconjg(Bop),k,q,1,v,Hv)
                 call Aop%free();call Bop%free()
              endif
           endif
@@ -1347,17 +1335,13 @@ contains
                    Aop = HopH(io,jo)*filter_left_operator(Lazy_CdgP_n(io),k,q)
                    Bop = filter_right_operator(Lazy_Cr_n(jo),k,q)
                    call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
-                   tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
-                   tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
-                   call apply_AxB_MPI_direct(Aop,Bop,k,q,1,v,Hv)
+                   call apply_AxB_MPI_direct(hconjg(Aop),hconjg(Bop),k,q,1,v,Hv)
                    call Aop%free();call Bop%free()
                    if(PBCdmrg)then
                       Aop = HopH(io,jo)*filter_left_operator(Lazy_CdgP_p(io),k,q)
                       Bop = filter_right_operator(Lazy_Cr_p(jo),k,q)
                       call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
-                      tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
-                      tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
-                      call apply_AxB_MPI_direct(Aop,Bop,k,q,1,v,Hv)
+                      call apply_AxB_MPI_direct(hconjg(Aop),hconjg(Bop),k,q,1,v,Hv)
                       call Aop%free();call Bop%free()
                    endif
                 enddo
