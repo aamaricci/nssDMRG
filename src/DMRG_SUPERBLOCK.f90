@@ -623,6 +623,8 @@ contains
     endif
     if(allocated(SBleft_states))deallocate(SBleft_states)
     if(allocated(SBright_states))deallocate(SBright_states)
+    if(allocated(SBleft_maps))deallocate(SBleft_maps)
+    if(allocated(SBright_maps))deallocate(SBright_maps)
     call Lazy_Hl%free()
     call Lazy_Hr%free()
     call Lazy_Pn%free()
@@ -642,8 +644,11 @@ contains
           call Lazy_Cr_n(i)%free()
           call Lazy_Cl_p(i)%free()
           call Lazy_Cr_p(i)%free()
+          call Lazy_CdgP_n(i)%free()
+          call Lazy_CdgP_p(i)%free()
        enddo
        deallocate(Lazy_Cl_n,Lazy_Cr_n,Lazy_Cl_p,Lazy_Cr_p)
+       deallocate(Lazy_CdgP_n,Lazy_CdgP_p)
     endif
     !
     call sb_delete_dims()
@@ -764,7 +769,6 @@ function sb_vecDim_Hv() result(vecDim)
 
 
 END MODULE DMRG_SUPERBLOCK
-
 
 
 

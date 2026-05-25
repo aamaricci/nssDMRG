@@ -241,6 +241,7 @@ contains
        SBleft_states(isb)%states = sb2block_states(qn,'left')
        SBright_states(isb)%states = sb2block_states(qn,'right')
     enddo
+    call setup_sector_filter_maps()
     if(MpiMaster)print*,"Get Filtered States:",t_stop()
     !
 
@@ -519,6 +520,7 @@ contains
        SBleft_states(isb)%states = sb2block_states(qn,'left')
        SBright_states(isb)%states = sb2block_states(qn,'right')
     enddo
+    call setup_sector_filter_maps()
     if(MpiMaster)write(LOGfile,*)"Get Filtered States:",t_stop()
     !
     !
@@ -770,6 +772,27 @@ contains
   end subroutine setup_lazy_spin_operators
 
 
+  subroutine setup_sector_filter_maps()
+    integer :: isb,istate
+    !
+    if(allocated(SBleft_maps))deallocate(SBleft_maps)
+    if(allocated(SBright_maps))deallocate(SBright_maps)
+    allocate(SBleft_maps(size(sb_sector)),SBright_maps(size(sb_sector)))
+    do isb=1,size(sb_sector)
+       allocate(SBleft_maps(isb)%states(left%Dim))
+       allocate(SBright_maps(isb)%states(right%Dim))
+       SBleft_maps(isb)%states=0
+       SBright_maps(isb)%states=0
+       do istate=1,size(SBleft_states(isb)%states)
+          SBleft_maps(isb)%states(SBleft_states(isb)%states(istate)) = istate
+       enddo
+       do istate=1,size(SBright_states(isb)%states)
+          SBright_maps(isb)%states(SBright_states(isb)%states(istate)) = istate
+       enddo
+    enddo
+  end subroutine setup_sector_filter_maps
+
+
   subroutine setup_lazy_fermion_operators(Cl_n,Cl_p,Cr_n,Cr_p,P_n,P_p,Hl,Hr)
     type(sparse_matrix),dimension(:),intent(in) :: Cl_n,Cl_p,Cr_n,Cr_p
     type(sparse_matrix),intent(in)              :: P_n,P_p,Hl,Hr
@@ -789,16 +812,22 @@ contains
           call Lazy_Cr_n(io)%free()
           call Lazy_Cl_p(io)%free()
           call Lazy_Cr_p(io)%free()
+          call Lazy_CdgP_n(io)%free()
+          call Lazy_CdgP_p(io)%free()
        enddo
        deallocate(Lazy_Cl_n,Lazy_Cr_n,Lazy_Cl_p,Lazy_Cr_p)
+       deallocate(Lazy_CdgP_n,Lazy_CdgP_p)
     endif
     allocate(Lazy_Cl_n(size(Cl_n)),Lazy_Cr_n(size(Cr_n)))
     allocate(Lazy_Cl_p(size(Cl_p)),Lazy_Cr_p(size(Cr_p)))
+    allocate(Lazy_CdgP_n(size(Cl_n)),Lazy_CdgP_p(size(Cl_p)))
     do io=1,size(Cl_n)
        Lazy_Cl_n(io) = Cl_n(io)
        Lazy_Cr_n(io) = Cr_n(io)
        Lazy_Cl_p(io) = Cl_p(io)
        Lazy_Cr_p(io) = Cr_p(io)
+       Lazy_CdgP_n(io) = matmul(Cl_n(io)%dgr(),P_n)
+       if(PBCdmrg)Lazy_CdgP_p(io) = matmul(Cl_p(io)%dgr(),P_p)
     enddo
   end subroutine setup_lazy_fermion_operators
 
@@ -1078,7 +1107,7 @@ contains
     t0=t_start()
     type=str(left%type())
     sector: do k=1,size(sb_sector)
-       Hrk = sp_filter(Lazy_Hr,SBright_states(k)%states)
+       Hrk = sp_filter(Lazy_Hr,SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
        do il=1,Dls(k)
           do ir=1,Drs(k)
              i = ir + (il-1)*Drs(k) + offset(k)
@@ -1091,7 +1120,7 @@ contains
           enddo
        enddo
        call Hrk%free()
-       Hlk = sp_filter(Lazy_Hl,SBleft_states(k)%states)
+       Hlk = sp_filter(Lazy_Hl,SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
        do ir=1,Drs(k)
           do il=1,Dls(k)
              i = ir + (il-1)*Drs(k) + offset(k)
@@ -1107,16 +1136,16 @@ contains
        qn = sb_sector%qn(index=k)
        select case(to_lower(type(1:1)))
        case("s")
-          Aop = HopH(1,1)*sp_filter(Lazy_Sl_n(1),SBleft_states(k)%states,SBleft_states(k)%states)
-          Bop = sp_filter(Lazy_Sr_n(1),SBright_states(k)%states,SBright_states(k)%states)
+          Aop = HopH(1,1)*sp_filter(Lazy_Sl_n(1),SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
+          Bop = sp_filter(Lazy_Sr_n(1),SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
           call apply_AxB_direct(Aop,Bop,Offset(k),Offset(k),v,Hv)
           call Aop%free();call Bop%free()
           dq = [1d0]
           qm = qn - dq
           if(sb_sector%has_qn(qm))then
              q = sb_sector%index(qn=qm)
-             Aop = HopH(2,2)*sp_filter(Lazy_Sl_n(2),SBleft_states(k)%states,SBleft_states(q)%states)
-             Bop = sp_filter(hconjg(Lazy_Sr_n(2)),SBright_states(k)%states,SBright_states(q)%states)
+             Aop = HopH(2,2)*sp_filter(Lazy_Sl_n(2),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
+             Bop = sp_filter(hconjg(Lazy_Sr_n(2)),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
              call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
              tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
              tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1124,15 +1153,15 @@ contains
              call Aop%free();call Bop%free()
           endif
           if(PBCdmrg)then
-             Aop = HopH(1,1)*sp_filter(Lazy_Sl_p(1),SBleft_states(k)%states,SBleft_states(k)%states)
-             Bop = sp_filter(Lazy_Sr_p(1),SBright_states(k)%states,SBright_states(k)%states)
+             Aop = HopH(1,1)*sp_filter(Lazy_Sl_p(1),SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
+             Bop = sp_filter(Lazy_Sr_p(1),SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
              call apply_AxB_direct(Aop,Bop,Offset(k),Offset(k),v,Hv)
              call Aop%free();call Bop%free()
              qm = qn - [1d0]
              if(sb_sector%has_qn(qm))then
                 q = sb_sector%index(qn=qm)
-                Aop = HopH(2,2)*sp_filter(Lazy_Sl_p(2),SBleft_states(k)%states,SBleft_states(q)%states)
-                Bop = sp_filter(hconjg(Lazy_Sr_p(2)),SBright_states(k)%states,SBright_states(q)%states)
+                Aop = HopH(2,2)*sp_filter(Lazy_Sl_p(2),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
+                Bop = sp_filter(hconjg(Lazy_Sr_p(2)),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
                 call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
                 tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                 tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1164,20 +1193,16 @@ contains
                    io = iorb+(ispin-1)*Norb
                    jo = jorb+(ispin-1)*Norb
                    if(HopH(io,jo)==zero)cycle
-                   tmpOp = matmul(Lazy_Cl_n(io)%dgr(),Lazy_Pn)
-                   Aop = HopH(io,jo)*sp_filter(tmpOp,SBleft_states(k)%states,SBleft_states(q)%states)
-                   call tmpOp%free()
-                   Bop = sp_filter(Lazy_Cr_n(jo),SBright_states(k)%states,SBright_states(q)%states)
+                   Aop = HopH(io,jo)*sp_filter(Lazy_CdgP_n(io),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
+                   Bop = sp_filter(Lazy_Cr_n(jo),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
                    call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
                    tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                    tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
                    call apply_AxB_direct(Aop,Bop,Offset(q),Offset(k),v,Hv)
                    call Aop%free();call Bop%free()
                    if(PBCdmrg)then
-                      tmpOp = matmul(Lazy_Cl_p(io)%dgr(),Lazy_Pp)
-                      Aop = HopH(io,jo)*sp_filter(tmpOp,SBleft_states(k)%states,SBleft_states(q)%states)
-                      call tmpOp%free()
-                      Bop = sp_filter(Lazy_Cr_p(jo),SBright_states(k)%states,SBright_states(q)%states)
+                      Aop = HopH(io,jo)*sp_filter(Lazy_CdgP_p(io),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
+                      Bop = sp_filter(Lazy_Cr_p(jo),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
                       call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
                       tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                       tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1220,7 +1245,7 @@ contains
     t0=t_start()
     type=str(left%type())
     sector: do k=1,size(sb_sector)
-       Hrk = sp_filter(Lazy_Hr,SBright_states(k)%states)
+       Hrk = sp_filter(Lazy_Hr,SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
        do il=1,mpiDls(k)
           do ir=1,Drs(k)
              i = ir + (il-1)*Drs(k) + mpiOffset(k)
@@ -1233,7 +1258,7 @@ contains
           enddo
        enddo
        call Hrk%free()
-       Hlk = sp_filter(Lazy_Hl,SBleft_states(k)%states)
+       Hlk = sp_filter(Lazy_Hl,SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
        allocate(vt(mpiDrs(k)*Dls(k)));vt=zero
        allocate(Hvt(mpiDrs(k)*Dls(k)));Hvt=zero
        i_start = 1 + mpiOffset(k)
@@ -1258,16 +1283,16 @@ contains
        qn = sb_sector%qn(index=k)
        select case(to_lower(type(1:1)))
        case("s")
-          Aop = HopH(1,1)*sp_filter(Lazy_Sl_n(1),SBleft_states(k)%states,SBleft_states(k)%states)
-          Bop = sp_filter(Lazy_Sr_n(1),SBright_states(k)%states,SBright_states(k)%states)
+          Aop = HopH(1,1)*sp_filter(Lazy_Sl_n(1),SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
+          Bop = sp_filter(Lazy_Sr_n(1),SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
           call apply_AxB_MPI_direct(Aop,Bop,k,k,0,v,Hv)
           call Aop%free();call Bop%free()
           dq = [1d0]
           qm = qn - dq
           if(sb_sector%has_qn(qm))then
              q = sb_sector%index(qn=qm)
-             Aop = HopH(2,2)*sp_filter(Lazy_Sl_n(2),SBleft_states(k)%states,SBleft_states(q)%states)
-             Bop = sp_filter(hconjg(Lazy_Sr_n(2)),SBright_states(k)%states,SBright_states(q)%states)
+             Aop = HopH(2,2)*sp_filter(Lazy_Sl_n(2),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
+             Bop = sp_filter(hconjg(Lazy_Sr_n(2)),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
              call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
              tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
              tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1275,15 +1300,15 @@ contains
              call Aop%free();call Bop%free()
           endif
           if(PBCdmrg)then
-             Aop = HopH(1,1)*sp_filter(Lazy_Sl_p(1),SBleft_states(k)%states,SBleft_states(k)%states)
-             Bop = sp_filter(Lazy_Sr_p(1),SBright_states(k)%states,SBright_states(k)%states)
+             Aop = HopH(1,1)*sp_filter(Lazy_Sl_p(1),SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
+             Bop = sp_filter(Lazy_Sr_p(1),SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
              call apply_AxB_MPI_direct(Aop,Bop,k,k,0,v,Hv)
              call Aop%free();call Bop%free()
              qm = qn - [1d0]
              if(sb_sector%has_qn(qm))then
                 q = sb_sector%index(qn=qm)
-                Aop = HopH(2,2)*sp_filter(Lazy_Sl_p(2),SBleft_states(k)%states,SBleft_states(q)%states)
-                Bop = sp_filter(hconjg(Lazy_Sr_p(2)),SBright_states(k)%states,SBright_states(q)%states)
+                Aop = HopH(2,2)*sp_filter(Lazy_Sl_p(2),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
+                Bop = sp_filter(hconjg(Lazy_Sr_p(2)),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
                 call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
                 tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                 tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1315,20 +1340,16 @@ contains
                    io = iorb+(ispin-1)*Norb
                    jo = jorb+(ispin-1)*Norb
                    if(HopH(io,jo)==zero)cycle
-                   tmpOp = matmul(Lazy_Cl_n(io)%dgr(),Lazy_Pn)
-                   Aop = HopH(io,jo)*sp_filter(tmpOp,SBleft_states(k)%states,SBleft_states(q)%states)
-                   call tmpOp%free()
-                   Bop = sp_filter(Lazy_Cr_n(jo),SBright_states(k)%states,SBright_states(q)%states)
+                   Aop = HopH(io,jo)*sp_filter(Lazy_CdgP_n(io),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
+                   Bop = sp_filter(Lazy_Cr_n(jo),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
                    call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
                    tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                    tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
                    call apply_AxB_MPI_direct(Aop,Bop,k,q,1,v,Hv)
                    call Aop%free();call Bop%free()
                    if(PBCdmrg)then
-                      tmpOp = matmul(Lazy_Cl_p(io)%dgr(),Lazy_Pp)
-                      Aop = HopH(io,jo)*sp_filter(tmpOp,SBleft_states(k)%states,SBleft_states(q)%states)
-                      call tmpOp%free()
-                      Bop = sp_filter(Lazy_Cr_p(jo),SBright_states(k)%states,SBright_states(q)%states)
+                      Aop = HopH(io,jo)*sp_filter(Lazy_CdgP_p(io),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
+                      Bop = sp_filter(Lazy_Cr_p(jo),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
                       call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
                       tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                       tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()

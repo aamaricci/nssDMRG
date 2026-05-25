@@ -176,6 +176,7 @@ MODULE MATRIX_SPARSE
   interface sp_filter
      module procedure :: sp_filter_matrix_1
      module procedure :: sp_filter_matrix_2
+     module procedure :: sp_filter_matrix_map
   end interface sp_filter
 
   interface sp_add3
@@ -620,6 +621,64 @@ contains
        enddo
     enddo
   end function sp_filter_matrix_2
+
+
+  function sp_filter_matrix_map(A,Istates,Jmap,NJstates) result(Ak)
+    class(sparse_matrix), intent(in)    :: A
+    integer,dimension(:),intent(in)     :: Istates,Jmap
+    integer,intent(in)                  :: NJstates
+    type(sparse_matrix)                 :: Ak
+    integer                             :: NIstates, Nmap, M
+    integer, dimension(:), allocatable  :: nnz_count
+    integer                             :: i,j,jj,istate,jstate
+#ifdef _CMPLX
+    complex(8)                          :: val
+#else
+    real(8)                             :: val
+#endif
+    !
+    NIstates = size(Istates)
+    Nmap     = size(Jmap)
+    !
+    call Ak%free()
+    call Ak%init(NIstates,NJstates)
+    !
+    allocate(nnz_count(NIstates))
+    nnz_count = 0
+    do istate = 1, NIstates
+       i = Istates(istate)
+       do jj = 1, A%row(i)%Size
+          j = A%row(i)%cols(jj)
+          if(j > Nmap)cycle
+          if(Jmap(j) > 0)nnz_count(istate) = nnz_count(istate) + 1
+       enddo
+    enddo
+    !
+    do istate = 1, NIstates
+       M = nnz_count(istate)
+       if(M == 0)cycle
+       Ak%row(istate)%Size = M
+       if(allocated(Ak%row(istate)%vals))deallocate(Ak%row(istate)%vals)
+       if(allocated(Ak%row(istate)%cols))deallocate(Ak%row(istate)%cols)
+       allocate(Ak%row(istate)%vals(M))
+       allocate(Ak%row(istate)%cols(M))
+    enddo
+    !
+    nnz_count = 0
+    do istate = 1, NIstates
+       i = Istates(istate)
+       do jj = 1, A%row(i)%Size
+          j = A%row(i)%cols(jj)
+          if(j > Nmap)cycle
+          jstate = Jmap(j)
+          if(jstate==0)cycle
+          val = A%row(i)%vals(jj)
+          nnz_count(istate) = nnz_count(istate) + 1
+          Ak%row(istate)%vals(nnz_count(istate)) = val
+          Ak%row(istate)%cols(nnz_count(istate)) = jstate
+       enddo
+    enddo
+  end function sp_filter_matrix_map
 
 
 
