@@ -638,16 +638,14 @@ contains
        enddo
        deallocate(Lazy_Sl_n,Lazy_Sr_n,Lazy_Sl_p,Lazy_Sr_p)
     endif
-    if(allocated(Lazy_Cl_n))then
-       do concurrent(i=1:size(Lazy_Cl_n))
-          call Lazy_Cl_n(i)%free()
+    if(allocated(Lazy_CdgP_n))then
+       do concurrent(i=1:size(Lazy_CdgP_n))
           call Lazy_Cr_n(i)%free()
-          call Lazy_Cl_p(i)%free()
           call Lazy_Cr_p(i)%free()
           call Lazy_CdgP_n(i)%free()
           call Lazy_CdgP_p(i)%free()
        enddo
-       deallocate(Lazy_Cl_n,Lazy_Cr_n,Lazy_Cl_p,Lazy_Cr_p)
+       deallocate(Lazy_Cr_n,Lazy_Cr_p)
        deallocate(Lazy_CdgP_n,Lazy_CdgP_p)
     endif
     !
@@ -769,7 +767,6 @@ function sb_vecDim_Hv() result(vecDim)
 
 
 END MODULE DMRG_SUPERBLOCK
-
 
 
 

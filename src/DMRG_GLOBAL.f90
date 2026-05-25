@@ -125,8 +125,7 @@ MODULE DMRG_GLOBAL
   type(sparse_matrix)                            :: Lazy_Pn,Lazy_Pp
   type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Sl_n,Lazy_Sr_n
   type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Sl_p,Lazy_Sr_p
-  type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Cl_n,Lazy_Cr_n
-  type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Cl_p,Lazy_Cr_p
+  type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Cr_n,Lazy_Cr_p
   type(sparse_matrix),allocatable,dimension(:)   :: Lazy_CdgP_n,Lazy_CdgP_p
   integer,dimension(:),allocatable               :: Dls,Drs,Offset
   integer,dimension(:,:),allocatable             :: RowOffset,ColOffset,isb2jsb
@@ -1014,6 +1013,5 @@ contains
 
 
 END MODULE DMRG_GLOBAL
-
 
 

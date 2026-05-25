@@ -14,6 +14,12 @@ MODULE DMRG_SUPERBLOCK_SETUP
   integer                                        :: ispin
   integer                                        :: iorb,jorb
   integer                                        :: io,jo
+  type(sparse_matrix),allocatable,dimension(:)   :: setup_Sl_n,setup_Sl_p
+  type(sparse_matrix),allocatable,dimension(:)   :: setup_Sr_n,setup_Sr_p
+  type(sparse_matrix),allocatable,dimension(:)   :: setup_Cl_n,setup_Cl_p
+  type(sparse_matrix),allocatable,dimension(:)   :: setup_Cr_n,setup_Cr_p
+  type(sparse_matrix)                            :: setup_Hl,setup_Hr
+  type(sparse_matrix)                            :: setup_P_n,setup_P_p
 
 
   public :: Setup_SuperBlock_Sparse
@@ -153,16 +159,340 @@ contains
   !##################################################################
   !                          SPIN CASE
   !##################################################################
+  subroutine load_spin_setup_operators()
+    integer :: is
+    !
+    call free_setup_operators()
+    allocate(setup_Sl_n(Nspin),setup_Sr_n(Nspin))
+    allocate(setup_Sl_p(Nspin),setup_Sr_p(Nspin))
+    if(MpiMaster)then
+       do is=1,Nspin
+          setup_Sl_n(is) = left%operators%op("S"//left%okey(0,is,ilink='n'))
+          setup_Sr_n(is) = right%operators%op("S"//right%okey(0,is,ilink='n'))
+          if(PBCdmrg)then
+             setup_Sl_p(is) = left%operators%op("S"//left%okey(0,is,ilink='p'))
+             setup_Sr_p(is) = right%operators%op("S"//right%okey(0,is,ilink='p'))
+          endif
+       enddo
+       setup_Hl = left%operators%op("H")
+       setup_Hr = right%operators%op("H")
+    endif
+#ifdef _MPI
+    if(MpiStatus)then
+       do is=1,Nspin
+          call setup_Sl_n(is)%bcast()
+          call setup_Sr_n(is)%bcast()
+          if(PBCdmrg)then
+             call setup_Sl_p(is)%bcast()
+             call setup_Sr_p(is)%bcast()
+          endif
+       enddo
+       call setup_Hl%bcast()
+       call setup_Hr%bcast()
+    endif
+#endif
+  end subroutine load_spin_setup_operators
+
+
+  subroutine free_setup_operators()
+    integer :: is
+    !
+    call setup_Hl%free()
+    call setup_Hr%free()
+    call setup_P_n%free()
+    call setup_P_p%free()
+    if(allocated(setup_Sl_n))then
+       do is=1,size(setup_Sl_n)
+          call setup_Sl_n(is)%free()
+          call setup_Sr_n(is)%free()
+          call setup_Sl_p(is)%free()
+          call setup_Sr_p(is)%free()
+       enddo
+       deallocate(setup_Sl_n,setup_Sr_n,setup_Sl_p,setup_Sr_p)
+    endif
+    if(allocated(setup_Cl_n))then
+       do is=1,size(setup_Cl_n)
+          call setup_Cl_n(is)%free()
+          call setup_Cr_n(is)%free()
+          call setup_Cl_p(is)%free()
+          call setup_Cr_p(is)%free()
+       enddo
+       deallocate(setup_Cl_n,setup_Cr_n,setup_Cl_p,setup_Cr_p)
+    endif
+  end subroutine free_setup_operators
+
+
+  subroutine setup_cache_spin_operators(tMap)
+    integer,dimension(:,:,:),intent(in) :: tMap
+    real(8),dimension(:),allocatable    :: qn,qm,dq
+    integer                             :: it,isb,jsb,ierr,sizeA,sizeB
+    !
+    if(MpiMaster)t0=t_start()
+    isb2jsb=0
+    do isb=1+MpiRank,size(sb_sector),MpiSize
+       sizeA=size(SBleft_states(isb)%states)
+       sizeB=size(SBright_states(isb)%states)
+       if(MpiMaster.AND.sizeA>10)&
+            write(LOGfile,*)"isb:"//str(isb)//"/"//str(size(sb_sector))//&
+               " N(isb):"//str(sizeA)//","//str(sizeB)
+       !
+       qn = sb_sector%qn(index=isb)
+       Hleft(isb) = filter_left_operator(setup_Hl,isb,isb)
+       Hright(isb)= filter_right_operator(setup_Hr,isb,isb)
+       !
+       it = tMap(1,1,1)
+       A(it,isb) = HopH(1,1)*filter_left_operator(setup_Sl_n(1),isb,isb)
+       B(it,isb) = filter_right_operator(setup_Sr_n(1),isb,isb)
+       jsb = isb
+       Isb2Jsb(it,isb) = jsb
+       IsHconjg(it,isb)= 0
+       RowOffset(it,isb)=Offset(isb)
+       ColOffset(it,isb)=Offset(isb)
+       !
+       dq = [1d0]
+       qm = qn - dq
+       if(.not.sb_sector%has_qn(qm))cycle
+       jsb = sb_sector%index(qn=qm)
+       !
+       it=tMap(2,1,1)
+       A(it,isb) = HopH(2,2)*filter_left_operator(setup_Sl_n(2),isb,jsb)
+       B(it,isb) = filter_right_operator(hconjg(setup_Sr_n(2)),isb,jsb)
+       Isb2Jsb(it,isb)  = jsb
+       IsHconjg(it,isb) = 0
+       RowOffset(it,isb)= Offset(isb)
+       ColOffset(it,isb)= Offset(jsb)
+       !
+       it=tMap(3,1,1)
+       A(it,isb) = hconjg(A(tMap(2,1,1),isb))
+       B(it,isb) = hconjg(B(tMap(2,1,1),isb))
+       Isb2Jsb(it,isb)  = jsb
+       IsHconjg(it,isb) = 1
+       RowOffset(it,isb)= Offset(jsb)
+       ColOffset(it,isb)= Offset(isb)
+       !
+       if(PBCdmrg)then
+          it = tMap(4,1,1)
+          A(it,isb) = HopH(1,1)*filter_left_operator(setup_Sl_p(1),isb,isb)
+          B(it,isb) = filter_right_operator(setup_Sr_p(1),isb,isb)
+          jsb = isb
+          Isb2Jsb(it,isb) = jsb
+          IsHconjg(it,isb)= 0
+          RowOffset(it,isb)= Offset(isb)
+          ColOffset(it,isb)= Offset(isb)
+          !
+          qm = qn - dq
+          if(.not.sb_sector%has_qn(qm))cycle
+          jsb = sb_sector%index(qn=qm)
+          !
+          it=tMap(5,1,1)
+          A(it,isb) = HopH(2,2)*filter_left_operator(setup_Sl_p(2),isb,jsb)
+          B(it,isb) = filter_right_operator(hconjg(setup_Sr_p(2)),isb,jsb)
+          Isb2Jsb(it,isb)  = jsb
+          IsHconjg(it,isb) = 0
+          RowOffset(it,isb)= Offset(isb)
+          ColOffset(it,isb)= Offset(jsb)
+          !
+          it=tMap(6,1,1)
+          A(it,isb) = hconjg(A(tMap(5,1,1),isb))
+          B(it,isb) = hconjg(B(tMap(5,1,1),isb))
+          Isb2Jsb(it,isb)  = jsb
+          IsHconjg(it,isb) = 1
+          RowOffset(it,isb)= Offset(jsb)
+          ColOffset(it,isb)= Offset(isb)
+       endif
+    enddo
+    if(MpiMaster)print*,"Get Op Blocks:",t_stop()
+    !
+#ifdef _MPI
+    if(MpiStatus)then
+       if(MpiMaster)t0=t_start()
+       call AllGather_MPI(MpiComm,Hleft)
+       call AllGather_MPI(MpiComm,Hright)
+       call AllGather_MPI(MpiComm,A)
+       call AllGather_MPI(MpiComm,B)
+       call MPI_ALLREDUCE(Mpi_In_Place,Isb2Jsb,size(Isb2Jsb),&
+            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
+       call MPI_ALLREDUCE(Mpi_In_Place,RowOffset,size(RowOffset),&
+            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
+       call MPI_ALLREDUCE(Mpi_In_Place,ColOffset,size(ColOffset),&
+            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
+       call MPI_ALLREDUCE(Mpi_In_Place,IsHconjg,size(IsHconjg),&
+            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
+       do isb=1,size(sb_sector)
+          kb_sb_setup_bcast = kb_sb_setup_bcast + Hleft(isb)%bytes() + Hright(isb)%bytes()
+          do it=1,tNso
+             kb_sb_setup_bcast = kb_sb_setup_bcast + A(it,isb)%bytes()  + B(it,isb)%bytes()
+          enddo
+       enddo
+       if(MpiMaster)print*,"MpiComm Op Blocks:",t_stop()
+    endif
+#endif
+  end subroutine setup_cache_spin_operators
+
+
+  subroutine load_fermion_setup_operators()
+    integer :: is,iorb_,ispin_,io_
+    type(sparse_matrix) :: Ctmp
+    !
+    call free_setup_operators()
+    allocate(setup_Cl_n(Nspin*Norb),setup_Cr_n(Nspin*Norb))
+    allocate(setup_Cl_p(Nspin*Norb),setup_Cr_p(Nspin*Norb))
+    if(MpiMaster)then
+       setup_P_n = left%operators%op("P"//left%okey(0,0,ilink='n'))
+       if(PBCdmrg)setup_P_p = left%operators%op("P"//left%okey(0,0,ilink='p'))
+       do ispin_=1,Nspin
+          do iorb_=1,Norb
+             io_ = iorb_+(ispin_-1)*Norb
+             Ctmp = left%operators%op("C"//left%okey(iorb_,ispin_,ilink='n'))
+             setup_Cl_n(io_) = matmul(Ctmp%dgr(),setup_P_n)
+             call Ctmp%free()
+             setup_Cr_n(io_) = right%operators%op("C"//right%okey(iorb_,ispin_,ilink='n'))
+             if(PBCdmrg)then
+                Ctmp = left%operators%op("C"//left%okey(iorb_,ispin_,ilink='p'))
+                setup_Cl_p(io_) = matmul(Ctmp%dgr(),setup_P_p)
+                call Ctmp%free()
+                setup_Cr_p(io_) = right%operators%op("C"//right%okey(iorb_,ispin_,ilink='p'))
+             endif
+          enddo
+       enddo
+       setup_Hl = left%operators%op("H")
+       setup_Hr = right%operators%op("H")
+    endif
+#ifdef _MPI
+    if(MpiStatus)then
+       do is=1,Nspin*Norb
+          call setup_Cl_n(is)%bcast()
+          call setup_Cr_n(is)%bcast()
+          if(PBCdmrg)then
+             call setup_Cl_p(is)%bcast()
+             call setup_Cr_p(is)%bcast()
+          endif
+       enddo
+       call setup_Hl%bcast()
+       call setup_Hr%bcast()
+    endif
+#endif
+  end subroutine load_fermion_setup_operators
+
+
+  subroutine setup_cache_fermion_operators(tMap)
+    integer,dimension(:,:,:),intent(in) :: tMap
+    real(8),dimension(:),allocatable    :: qn,qm,dq,qnup,qndw
+    integer                             :: it,isb,jsb,ierr,sizeA,sizeB
+    integer                             :: ispin_,iorb_,jorb_,io_,jo_
+    !
+    allocate(qnup, mold=current_target_qn)
+    allocate(qndw, mold=current_target_qn)
+    select case(dmrg_mode)
+    case default
+       qnup = [1d0,0d0]
+       qndw = [0d0,1d0]
+    case("superc")
+       qnup = [ 1d0]
+       qndw = [-1d0]
+    case("nonsu2")
+       qnup = [1d0]
+       qndw = [1d0]
+    end select
+    !
+    if(MpiMaster)t0=t_start()
+    isb2jsb=0
+    do isb=1+MpiRank,size(sb_sector),MpiSize
+       sizeA=size(SBleft_states(isb)%states)
+       sizeB=size(SBright_states(isb)%states)
+       if(MpiMaster.AND.sizeA>10)&
+            write(LOGfile,*)"isb:"//str(isb)//"/"//str(size(sb_sector))//&
+            " N(isb):"//str(sizeA)//","//str(sizeB)
+       !
+       qn = sb_sector%qn(index=isb)
+       Hleft(isb) = filter_left_operator(setup_Hl,isb,isb)
+       Hright(isb)= filter_right_operator(setup_Hr,isb,isb)
+       !
+       do ispin_=1,Nspin
+          dq = qnup ; if(ispin_==2)dq=qndw
+          qm = qn - dq
+          if(.not.sb_sector%has_qn(qm))cycle
+          jsb = sb_sector%index(qn=qm)
+          !
+          do iorb_=1,Norb
+             do jorb_=1,Norb
+                io_ = iorb_+(ispin_-1)*Norb
+                jo_ = jorb_+(ispin_-1)*Norb
+                if(HopH(io_,jo_)==zero)cycle
+                !
+                it=tMap(1,io_,jo_)
+                A(it,isb) = HopH(io_,jo_)*filter_left_operator(setup_Cl_n(io_),isb,jsb)
+                B(it,isb) = filter_right_operator(setup_Cr_n(jo_),isb,jsb)
+                Isb2Jsb(it,isb)  = jsb
+                IsHconjg(it,isb) = 0
+                RowOffset(it,isb)= Offset(isb)
+                ColOffset(it,isb)= Offset(jsb)
+                !
+                it=tMap(2,io_,jo_)
+                A(it,isb) = hconjg(A(tMap(1,io_,jo_),isb))
+                B(it,isb) = hconjg(B(tMap(1,io_,jo_),isb))
+                Isb2Jsb(it,isb)  = jsb
+                IsHconjg(it,isb) = 1
+                RowOffset(it,isb)= Offset(jsb)
+                ColOffset(it,isb)= Offset(isb)
+                !
+                if(PBCdmrg)then
+                   it=tMap(3,io_,jo_)
+                   A(it,isb) = HopH(io_,jo_)*filter_left_operator(setup_Cl_p(io_),isb,jsb)
+                   B(it,isb) = filter_right_operator(setup_Cr_p(jo_),isb,jsb)
+                   Isb2Jsb(it,isb)  = jsb
+                   IsHconjg(it,isb) = 0
+                   RowOffset(it,isb)= Offset(isb)
+                   ColOffset(it,isb)= Offset(jsb)
+                   !
+                   it=tMap(4,io_,jo_)
+                   A(it,isb) = hconjg(A(tMap(3,io_,jo_),isb))
+                   B(it,isb) = hconjg(B(tMap(3,io_,jo_),isb))
+                   Isb2Jsb(it,isb)  = jsb
+                   IsHconjg(it,isb) = 1
+                   RowOffset(it,isb)= Offset(jsb)
+                   ColOffset(it,isb)= Offset(isb)
+                endif
+             enddo
+          enddo
+       enddo
+    enddo
+    if(MpiMaster)write(LOGfile,*)"Get Op Blocks:",t_stop()
+    deallocate(qnup,qndw)
+    !
+#ifdef _MPI
+    if(MpiStatus)then
+       if(MpiMaster)t0=t_start()
+       call AllGather_MPI(MpiComm,Hleft)
+       call AllGather_MPI(MpiComm,Hright)
+       call AllGather_MPI(MpiComm,A)
+       call AllGather_MPI(MpiComm,B)
+       call MPI_ALLREDUCE(Mpi_In_Place,Isb2Jsb,size(Isb2Jsb),&
+            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
+       call MPI_ALLREDUCE(Mpi_In_Place,RowOffset,size(RowOffset),&
+            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
+       call MPI_ALLREDUCE(Mpi_In_Place,ColOffset,size(ColOffset),&
+            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
+       call MPI_ALLREDUCE(Mpi_In_Place,IsHconjg,size(IsHconjg),&
+            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
+       do isb=1,size(sb_sector)
+          kb_sb_setup_bcast = kb_sb_setup_bcast + Hleft(isb)%bytes() + Hright(isb)%bytes()
+          do it=1,tNso
+             kb_sb_setup_bcast = kb_sb_setup_bcast + A(it,isb)%bytes()  + B(it,isb)%bytes()
+          enddo
+       enddo
+       if(MpiMaster)print*,"MpiComm Op Blocks:",t_stop()
+    endif
+#endif
+  end subroutine setup_cache_fermion_operators
+
+
   subroutine Setup_SuperBlock_Spin_Direct()
     integer                                      :: Nso,Nsb
     integer                                      :: it,isb,jsb,ierr,sizeA,sizeB
     real(8),dimension(:),allocatable             :: qn,qm
-    type(tstates),dimension(:),allocatable       :: Aj,Bj
     real(8),dimension(:),allocatable             :: dq
     integer,dimension(:,:,:),allocatable         :: tMap
-    type(sparse_matrix),allocatable,dimension(:) :: Sl_n,Sl_p !Left
-    type(sparse_matrix),allocatable,dimension(:) :: Sr_n,Sr_p !Right
-    type(sparse_matrix)                          :: Hl,Hr
 #ifdef _CMPLX
     complex(8),dimension(:,:),allocatable        :: Hij
 #else
@@ -219,10 +549,6 @@ contains
     if(allocated(Hright))deallocate(Hright)
     if(allocated(isb2jsb))deallocate(isb2jsb)
     if(allocated(IsHconjg))deallocate(IsHconjg)
-    if(allocated(Sl_n))deallocate(Sl_n)
-    if(allocated(Sl_p))deallocate(Sl_p)
-    if(allocated(Sr_n))deallocate(Sr_n)
-    if(allocated(Sr_p))deallocate(Sr_p)
     !    
     allocate(SBleft_states(Nsb),SBright_states(Nsb))
     if(.not.direct_H_lazy)then
@@ -231,8 +557,6 @@ contains
        allocate(isb2jsb(tNso,Nsb));isb2jsb=0
        allocate(IsHconjg(tNso,Nsb));IsHconjg=0
     endif
-    allocate(Sl_n(Nspin),Sr_n(Nspin))
-    allocate(Sl_p(Nspin),Sr_p(Nspin))
     !
     if(MpiMaster)t0=t_start()
     !Main computation:
@@ -248,167 +572,17 @@ contains
     !
     ! ROOT get basic operators from L/R blocks and bcast them
     if(MpiMaster)t0=t_start()
-    if(MpiMaster)then
-       do ispin=1,Nspin
-          Sl_n(ispin) = left%operators%op("S"//left%okey(0,ispin,ilink='n'))
-          Sr_n(ispin) = right%operators%op("S"//right%okey(0,ispin,ilink='n'))
-          if(PBCdmrg)then
-             Sl_p(ispin) = left%operators%op("S"//left%okey(0,ispin,ilink='p'))
-             Sr_p(ispin) = right%operators%op("S"//right%okey(0,ispin,ilink='p'))
-          endif
-       enddo
-       Hl = left%operators%op("H")
-       Hr = right%operators%op("H")
-    endif
-#ifdef _MPI
-    if(MpiStatus)then
-       do ispin=1,Nspin
-          call Sl_n(ispin)%bcast()
-          call Sr_n(ispin)%bcast()
-          if(PBCdmrg)then
-             call Sl_p(ispin)%bcast()
-             call Sr_p(ispin)%bcast()
-          endif
-       enddo
-       call Hl%bcast()
-       call Hr%bcast()
-    endif
-#endif
+    call load_spin_setup_operators()
     if(MpiMaster)print*,"Build Operators:",t_stop()
     !
     !
     if(direct_H_lazy)then
-       call setup_lazy_spin_operators(Sl_n,Sl_p,Sr_n,Sr_p,Hl,Hr)
+       call setup_lazy_spin_operators()
     else
-    !It is possible to MPI split the construction of the H_L,H_R,A,B ops
-    if(MpiMaster)t0=t_start()
-    isb2jsb=0
-    do isb=1+MpiRank,Nsb,MpiSize
-       !
-       sizeA=size(SBleft_states(isb)%states)
-       sizeB=size(SBright_states(isb)%states)
-       if(MpiMaster.AND.sizeA>10)&
-            write(LOGfile,*)"isb:"//str(isb)//"/"//str(Nsb)//&
-               " N(isb):"//str(sizeA)//","//str(sizeB)
-       !
-       qn = sb_sector%qn(index=isb)
-       !
-       Hleft(isb) = sp_filter(Hl,SBleft_states(isb)%states)
-       Hright(isb)= sp_filter(Hr,SBright_states(isb)%states)
-       !
-       !get  it=1: A = Jp*S_lz .x. B = S_rz + Row/Col Offsets (DIAGONAL)
-       it = tMap(1,1,1)
-       A(it,isb) = Hij(1,1)*sp_filter(Sl_n(1),SBleft_states(isb)%states,SBleft_states(isb)%states)
-       B(it,isb) = sp_filter(Sr_n(1),SBright_states(isb)%states,SBright_states(isb)%states)
-       qm  = qn
-       jsb = isb
-       Isb2Jsb(it,isb) =jsb
-       IsHconjg(it,isb)=0!.false.
-       RowOffset(it,isb)=Offset(isb)           
-       ColOffset(it,isb)=Offset(isb)
-       !
-       !> get it=2: A = Jxy*S_l- .x. B = [S_r-]^+=S_r+ + Row/Col Offsets
-       !> get it=3: A = Jxy*S_l+ .x. B = [S_r+]^+=S_r- + Row/Col Offsets 
-       dq = [1d0]
-       qm = qn - dq
-       if(.not.sb_sector%has_qn(qm))cycle
-       jsb = sb_sector%index(qn=qm)
-       !
-       !it=2
-       it=tMap(2,1,1)
-       A(it,isb) = Hij(2,2)*sp_filter(Sl_n(2),SBleft_states(isb)%states,SBleft_states(jsb)%states)
-       B(it,isb) = sp_filter(hconjg(Sr_n(2)),SBright_states(isb)%states,SBright_states(jsb)%states)
-       Isb2Jsb(it,isb)  =jsb
-       IsHconjg(it,isb) =0!.false.
-       RowOffset(it,isb)=Offset(isb)
-       ColOffset(it,isb)=Offset(jsb)
-       !
-       !it=3
-       it=tMap(3,1,1)
-       A(it,isb) = hconjg(A(tMap(2,1,1),isb))
-       B(it,isb) = hconjg(B(tMap(2,1,1),isb))
-       Isb2Jsb(it,isb)  =jsb
-       IsHconjg(it,isb) =1!.true.  !exchange jsb and isb
-       RowOffset(it,isb)=Offset(jsb)
-       ColOffset(it,isb)=Offset(isb)
-       !
-       if(PBCdmrg)then
-          !get it=4: A = Jp*S_lz .x. B = S_rz + Row/Col Offsets (DIAGONAL)
-          it = tMap(4,1,1)
-          A(it,isb) = Hij(1,1)*sp_filter(Sl_p(1),SBleft_states(isb)%states,SBleft_states(isb)%states)
-          B(it,isb) = sp_filter(Sr_p(1),SBright_states(isb)%states,SBright_states(isb)%states)
-          qm  = qn
-          jsb = isb
-          Isb2Jsb(it,isb) =jsb
-          IsHconjg(it,isb)=0!.false.
-          RowOffset(it,isb)=Offset(isb)           
-          ColOffset(it,isb)=Offset(isb)
-          !
-          !> get it=2: A = Jxy*S_l- .x. B = [S_r-]^+=S_r+ + Row/Col Offsets
-          !> get it=3: A = Jxy*S_l+ .x. B = [S_r+]^+=S_r- + Row/Col Offsets 
-          dq = [1d0]
-          qm = qn - dq
-          if(.not.sb_sector%has_qn(qm))cycle
-          jsb = sb_sector%index(qn=qm)
-          !
-          it=tMap(5,1,1)
-          A(it,isb) = Hij(2,2)*sp_filter(Sl_p(2),SBleft_states(isb)%states,SBleft_states(jsb)%states)
-          B(it,isb) = sp_filter(hconjg(Sr_p(2)),SBright_states(isb)%states,SBright_states(jsb)%states)
-          Isb2Jsb(it,isb)  =jsb
-          IsHconjg(it,isb) =0!.false.
-          RowOffset(it,isb)=Offset(isb)
-          ColOffset(it,isb)=Offset(jsb)
-          !
-          it=tMap(6,1,1)
-          A(it,isb) = hconjg(A(tMap(5,1,1),isb))
-          B(it,isb) = hconjg(B(tMap(5,1,1),isb))
-          Isb2Jsb(it,isb)  =jsb
-          IsHconjg(it,isb) =1!.true.  !exchange jsb and isb
-          RowOffset(it,isb)=Offset(jsb)
-          ColOffset(it,isb)=Offset(isb)
-       endif
-    enddo
-    if(MpiMaster)print*,"Get Op Blocks:",t_stop()
-    !
-#ifdef _MPI
-    !This can possibly be improved workin on AllGather_MPI so to use
-    !pack/unpack of the sparse matrix arrays.
-    if(MpiStatus)then
-       if(MpiMaster)t0=t_start()
-       call AllGather_MPI(MpiComm,Hleft)
-       call AllGather_MPI(MpiComm,Hright)
-       call AllGather_MPI(MpiComm,A)
-       call AllGather_MPI(MpiComm,B)
-       call MPI_ALLREDUCE(Mpi_In_Place,Isb2Jsb,size(Isb2Jsb),&
-            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
-       call MPI_ALLREDUCE(Mpi_In_Place,RowOffset,size(RowOffset),&
-            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
-       call MPI_ALLREDUCE(Mpi_In_Place,ColOffset,size(ColOffset),&
-            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
-       call MPI_ALLREDUCE(Mpi_In_Place,IsHconjg,size(IsHconjg),&
-            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
-       !Root accumulate the exchanged data:
-       do isb=1,Nsb
-          kb_sb_setup_bcast = kb_sb_setup_bcast + Hleft(isb)%bytes() + Hright(isb)%bytes()
-          do it=1,tNso
-             kb_sb_setup_bcast = kb_sb_setup_bcast + A(it,isb)%bytes()  + B(it,isb)%bytes()
-          enddo
-       enddo
-       if(MpiMaster)print*,"MpiComm Op Blocks:",t_stop()
-    endif
-#endif
+       call setup_cache_spin_operators(tMap)
     endif
     !
-    !
-    do ispin=1,Nspin
-       call Sl_n(ispin)%free()
-       call Sl_p(ispin)%free()
-       call Sr_n(ispin)%free()
-       call Sr_p(ispin)%free()
-    enddo
-    call Hl%free()
-    call Hr%free()
-    deallocate(Sl_n,Sr_n,Sl_p,Sr_p)
+    call free_setup_operators()
     !
     if(MpiMaster)call stop_timer("Setup SB Direct")
   end subroutine Setup_SuperBlock_Spin_Direct
@@ -426,14 +600,7 @@ contains
     integer                                      :: Nso,Nsb
     integer                                      :: it,isb,jsb,ierr,ipr,fbc,sizeA,sizeB
     real(8),dimension(:),allocatable             :: qn,qm
-    type(tstates),dimension(:),allocatable       :: Aj,Bj
-    real(8),dimension(:),allocatable             :: dq
-    real(8),dimension(:),allocatable             :: qnup,qndw
     integer,dimension(:,:,:),allocatable         :: tMap
-    type(sparse_matrix)                          :: Hl,Hr
-    type(sparse_matrix)                          :: P_n,P_p
-    type(sparse_matrix),allocatable,dimension(:) :: Cl_n,Cr_n
-    type(sparse_matrix),allocatable,dimension(:) :: Cl_p,Cr_p
 #ifdef _CMPLX
     complex(8),dimension(:,:),allocatable        :: Hij
 #else
@@ -497,10 +664,6 @@ contains
     if(allocated(Hright))deallocate(Hright)
     if(allocated(isb2jsb))deallocate(isb2jsb)
     if(allocated(IsHconjg))deallocate(IsHconjg)
-    if(allocated(Cl_n))deallocate(Cl_n)
-    if(allocated(Cl_p))deallocate(Cl_p)
-    if(allocated(Cr_n))deallocate(Cr_n)
-    if(allocated(Cr_p))deallocate(Cr_p)
     !
     allocate(SBleft_states(Nsb),SBright_states(Nsb))
     if(.not.direct_H_lazy)then
@@ -509,8 +672,6 @@ contains
        allocate(isb2jsb(tNso,Nsb));isb2jsb=0
        allocate(IsHconjg(tNso,Nsb));IsHconjg=0
     endif
-    allocate(Cl_n(Nso),Cr_n(Nso))
-    allocate(Cl_p(Nso),Cr_p(Nso))
     !
     !
     if(MpiMaster)t0=t_start()
@@ -526,182 +687,16 @@ contains
     !
     ! ROOT get basic operators from L/R blocks and bcast them
     if(MpiMaster)t0=t_start()
-    if(MpiMaster)then
-       P_n = left%operators%op("P"//left%okey(0,0,ilink='n'))
-       if(PBCdmrg) P_p = left%operators%op("P"//left%okey(0,0,ilink='p'))
-       do ispin=1,Nspin
-          do iorb=1,Norb
-             io = iorb+(ispin-1)*Norb
-             Cl_n(io) = left%operators%op("C"//left%okey(iorb,ispin,ilink='n'))
-             Cr_n(io) = right%operators%op("C"//right%okey(iorb,ispin,ilink='n'))
-             if(PBCdmrg)then
-                Cl_p(io) = left%operators%op("C"//left%okey(iorb,ispin,ilink='p'))
-                Cr_p(io) = right%operators%op("C"//right%okey(iorb,ispin,ilink='p'))
-             endif
-          enddo
-       enddo
-       Hl = left%operators%op("H")
-       Hr = right%operators%op("H")
-    endif
-#ifdef _MPI
-    if(MpiStatus)then
-       call P_n%bcast()
-       if(PBCdmrg)call P_p%bcast()
-       do ispin=1,Nspin
-          do iorb=1,Norb
-             io = iorb+(ispin-1)*Norb
-             call Cl_n(io)%bcast()
-             call Cr_n(io)%bcast()
-             if(PBCdmrg)then
-                call Cl_p(io)%bcast()
-                call Cr_p(io)%bcast()
-             endif
-          enddo
-       enddo
-       call Hl%bcast()
-       call Hr%bcast()
-    endif
-#endif
+    call load_fermion_setup_operators()
     if(MpiMaster)write(LOGfile,*)"Build Operators:",t_stop()
     !
-    !Setup dQ for each mode: dQ is Q after application of B=C(b,s)
-    !the Hermitian cobjugate is obtained by symmetry
-    allocate(qnup, mold=current_target_qn)
-    allocate(qndw, mold=current_target_qn)
-    select case(dmrg_mode)
-    case default
-       qnup = [1d0,0d0]         !Nup->Nup-1 (destroy electron spin-UP)
-       qndw = [0d0,1d0]         !Ndw->Ndw-1 (destroy electron spin-DW)
-    case("superc")
-       qnup = [ 1d0]            !Sz->Sz-1 (destroy electron spin-UP)
-       qndw = [-1d0]            !Sz->Sz+1 (destroy electron spin-DW)
-    case("nonsu2")
-       qnup = [ 1d0]            !N->N-1 (destroy electron whatever spin)
-       qndw = [ 1d0]            !N->N-1 (destroy electron whatever spin)
-    end select
-    !
     if(direct_H_lazy)then
-       call setup_lazy_fermion_operators(Cl_n,Cl_p,Cr_n,Cr_p,P_n,P_p,Hl,Hr)
+       call setup_lazy_fermion_operators()
     else
-    !It is possible to MPI split the construction of the H_L,H_R,A,B ops
-    if(MpiMaster)t0=t_start()
-    isb2jsb=0
-    do isb=1+MpiRank,Nsb,MpiSize
-       !
-       sizeA=size(SBleft_states(isb)%states)
-       sizeB=size(SBright_states(isb)%states)
-       if(MpiMaster.AND.sizeA>10)&
-            write(LOGfile,*)"isb:"//str(isb)//"/"//str(Nsb)//&
-            " N(isb):"//str(sizeA)//","//str(sizeB)
-       !
-       qn = sb_sector%qn(index=isb)
-       !
-       Hleft(isb) = sp_filter(Hl,SBleft_states(isb)%states)
-       Hright(isb)= sp_filter(Hr,SBright_states(isb)%states)
-       !
-       !> get it=1,io,jo: A = H(a,b)*[Cl(a,s)^+@P] .x. B = Cr(b,s)  + Row/Col Offsets
-       !> get it=2,io,jo: A = H(a,b)*[Cl(a,s)@P] .x. B = Cr(b,s)^+  + Row/Col Offsets
-       do ispin=1,Nspin
-          dq = qnup ; if(ispin==2)dq=qndw
-          qm = qn - dq
-          if(.not.sb_sector%has_qn(qm))cycle
-          jsb = sb_sector%index(qn=qm)
-          !
-          do iorb=1,Norb
-             do jorb=1,Norb
-                io = iorb+(ispin-1)*Norb
-                jo = jorb+(ispin-1)*Norb
-                if(Hij(io,jo)==0d0)cycle
-                !
-                !it=1,a,b
-                it=tMap(1,io,jo)
-                A(it,isb) = Hij(io,jo)*sp_filter(matmul(Cl_n(io)%dgr(),P_n),SBleft_states(isb)%states,SBleft_states(jsb)%states)
-                B(it,isb) = sp_filter(Cr_n(jo),SBright_states(isb)%states,SBright_states(jsb)%states)
-                Isb2Jsb(it,isb)  =jsb
-                IsHconjg(it,isb) =0!.false.
-                RowOffset(it,isb)=Offset(isb)           
-                ColOffset(it,isb)=Offset(jsb)
-                !
-                !it=2,a,b
-                it=tMap(2,io,jo)
-                A(it,isb) = hconjg(A(tMap(1,io,jo),isb))
-                B(it,isb) = hconjg(B(tMap(1,io,jo),isb))
-                Isb2Jsb(it,isb)  =jsb
-                IsHconjg(it,isb) =1!.true.
-                RowOffset(it,isb)=Offset(jsb)
-                ColOffset(it,isb)=Offset(isb)
-                !
-                if(PBCdmrg)then
-                   !it=3,a,b
-                   it=tMap(3,io,jo)
-                   A(it,isb) = Hij(io,jo)*sp_filter(matmul(Cl_p(io)%dgr(),P_p),SBleft_states(isb)%states,SBleft_states(jsb)%states)
-                   B(it,isb) = sp_filter(Cr_p(jo),SBright_states(isb)%states,SBright_states(jsb)%states)
-                   Isb2Jsb(it,isb)  =jsb
-                   IsHconjg(it,isb) =0!.false.
-                   RowOffset(it,isb)=Offset(isb)           
-                   ColOffset(it,isb)=Offset(jsb)
-                   !
-                   !it=2,a,b
-                   it=tMap(4,io,jo)
-                   A(it,isb) = hconjg(A(tMap(3,io,jo),isb))
-                   B(it,isb) = hconjg(B(tMap(3,io,jo),isb))
-                   Isb2Jsb(it,isb)  =jsb
-                   IsHconjg(it,isb) =1!.true.
-                   RowOffset(it,isb)=Offset(jsb)
-                   ColOffset(it,isb)=Offset(isb)
-                end if
-                !
-             enddo
-          enddo
-          !
-       enddo
-    enddo
-    if(MpiMaster)write(LOGfile,*)"Get Op Blocks:",t_stop()
-    !
-#ifdef _MPI
-    if(MpiStatus)then
-       if(MpiMaster)t0=t_start()
-       call AllGather_MPI(MpiComm,Hleft)
-       call AllGather_MPI(MpiComm,Hright)
-       call AllGather_MPI(MpiComm,A)
-       call AllGather_MPI(MpiComm,B)
-       call MPI_ALLREDUCE(Mpi_In_Place,Isb2Jsb,size(Isb2Jsb),&
-            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
-       call MPI_ALLREDUCE(Mpi_In_Place,RowOffset,size(RowOffset),&
-            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
-       call MPI_ALLREDUCE(Mpi_In_Place,ColOffset,size(ColOffset),&
-            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
-       call MPI_ALLREDUCE(Mpi_In_Place,IsHconjg,size(IsHconjg),&
-            MPI_INTEGER, MPI_SUM, MpiComm, ierr)
-       !Root accumulate the exchanged data:
-       do isb=1,Nsb
-          kb_sb_setup_bcast = kb_sb_setup_bcast + Hleft(isb)%bytes() + Hright(isb)%bytes()
-          do it=1,tNso
-             kb_sb_setup_bcast = kb_sb_setup_bcast + A(it,isb)%bytes()  + B(it,isb)%bytes()
-          enddo
-       enddo
-       if(MpiMaster)print*,"MpiComm Op Blocks:",t_stop()
-    endif
-#endif
+       call setup_cache_fermion_operators(tMap)
     endif
     !
-    call P_n%free()
-    call P_p%free()
-    call Hl%free()
-    call Hr%free()
-    do ispin=1,Nspin
-       do iorb=1,Norb
-          io = iorb+(ispin-1)*Norb
-          call Cl_n(io)%free()
-          call Cr_n(io)%free()
-          call Cl_p(io)%free()
-          call Cr_p(io)%free()
-       enddo
-    enddo
-    call Hl%free()
-    call Hr%free()
-    deallocate(Cl_n,Cr_n)
-    deallocate(Cl_p,Cr_p)
+    call free_setup_operators()
     !
     if(MpiMaster)call stop_timer("Setup SB Direct")
   end subroutine Setup_SuperBlock_Fermion_Direct
@@ -743,15 +738,13 @@ contains
   end subroutine spMatVec_sparse_main
 
 
-  subroutine setup_lazy_spin_operators(Sl_n,Sl_p,Sr_n,Sr_p,Hl,Hr)
-    type(sparse_matrix),dimension(:),intent(in) :: Sl_n,Sl_p,Sr_n,Sr_p
-    type(sparse_matrix),intent(in)              :: Hl,Hr
-    integer                                     :: is
+  subroutine setup_lazy_spin_operators()
+    integer :: is
     !
     call Lazy_Hl%free()
     call Lazy_Hr%free()
-    Lazy_Hl = Hl
-    Lazy_Hr = Hr
+    Lazy_Hl = setup_Hl
+    Lazy_Hr = setup_Hr
     if(allocated(Lazy_Sl_n))then
        do is=1,size(Lazy_Sl_n)
           call Lazy_Sl_n(is)%free()
@@ -761,13 +754,13 @@ contains
        enddo
        deallocate(Lazy_Sl_n,Lazy_Sr_n,Lazy_Sl_p,Lazy_Sr_p)
     endif
-    allocate(Lazy_Sl_n(size(Sl_n)),Lazy_Sr_n(size(Sr_n)))
-    allocate(Lazy_Sl_p(size(Sl_p)),Lazy_Sr_p(size(Sr_p)))
-    do is=1,size(Sl_n)
-       Lazy_Sl_n(is) = Sl_n(is)
-       Lazy_Sr_n(is) = Sr_n(is)
-       Lazy_Sl_p(is) = Sl_p(is)
-       Lazy_Sr_p(is) = Sr_p(is)
+    allocate(Lazy_Sl_n(size(setup_Sl_n)),Lazy_Sr_n(size(setup_Sr_n)))
+    allocate(Lazy_Sl_p(size(setup_Sl_p)),Lazy_Sr_p(size(setup_Sr_p)))
+    do is=1,size(setup_Sl_n)
+       Lazy_Sl_n(is) = setup_Sl_n(is)
+       Lazy_Sr_n(is) = setup_Sr_n(is)
+       Lazy_Sl_p(is) = setup_Sl_p(is)
+       Lazy_Sr_p(is) = setup_Sr_p(is)
     enddo
   end subroutine setup_lazy_spin_operators
 
@@ -793,41 +786,52 @@ contains
   end subroutine setup_sector_filter_maps
 
 
-  subroutine setup_lazy_fermion_operators(Cl_n,Cl_p,Cr_n,Cr_p,P_n,P_p,Hl,Hr)
-    type(sparse_matrix),dimension(:),intent(in) :: Cl_n,Cl_p,Cr_n,Cr_p
-    type(sparse_matrix),intent(in)              :: P_n,P_p,Hl,Hr
-    integer                                     :: io
+  function filter_left_operator(Op,irow,icol) result(Op_q)
+    type(sparse_matrix),intent(in) :: Op
+    integer,intent(in)             :: irow,icol
+    type(sparse_matrix)            :: Op_q
+    !
+    Op_q = sp_filter(Op,SBleft_states(irow)%states,SBleft_maps(icol)%states,size(SBleft_states(icol)%states))
+  end function filter_left_operator
+
+
+  function filter_right_operator(Op,irow,icol) result(Op_q)
+    type(sparse_matrix),intent(in) :: Op
+    integer,intent(in)             :: irow,icol
+    type(sparse_matrix)            :: Op_q
+    !
+    Op_q = sp_filter(Op,SBright_states(irow)%states,SBright_maps(icol)%states,size(SBright_states(icol)%states))
+  end function filter_right_operator
+
+
+  subroutine setup_lazy_fermion_operators()
+    integer :: io
     !
     call Lazy_Hl%free()
     call Lazy_Hr%free()
     call Lazy_Pn%free()
     call Lazy_Pp%free()
-    Lazy_Hl = Hl
-    Lazy_Hr = Hr
-    Lazy_Pn = P_n
-    Lazy_Pp = P_p
-    if(allocated(Lazy_Cl_n))then
-       do io=1,size(Lazy_Cl_n)
-          call Lazy_Cl_n(io)%free()
+    Lazy_Hl = setup_Hl
+    Lazy_Hr = setup_Hr
+    Lazy_Pn = setup_P_n
+    Lazy_Pp = setup_P_p
+    if(allocated(Lazy_CdgP_n))then
+       do io=1,size(Lazy_CdgP_n)
           call Lazy_Cr_n(io)%free()
-          call Lazy_Cl_p(io)%free()
           call Lazy_Cr_p(io)%free()
           call Lazy_CdgP_n(io)%free()
           call Lazy_CdgP_p(io)%free()
        enddo
-       deallocate(Lazy_Cl_n,Lazy_Cr_n,Lazy_Cl_p,Lazy_Cr_p)
+       deallocate(Lazy_Cr_n,Lazy_Cr_p)
        deallocate(Lazy_CdgP_n,Lazy_CdgP_p)
     endif
-    allocate(Lazy_Cl_n(size(Cl_n)),Lazy_Cr_n(size(Cr_n)))
-    allocate(Lazy_Cl_p(size(Cl_p)),Lazy_Cr_p(size(Cr_p)))
-    allocate(Lazy_CdgP_n(size(Cl_n)),Lazy_CdgP_p(size(Cl_p)))
-    do io=1,size(Cl_n)
-       Lazy_Cl_n(io) = Cl_n(io)
-       Lazy_Cr_n(io) = Cr_n(io)
-       Lazy_Cl_p(io) = Cl_p(io)
-       Lazy_Cr_p(io) = Cr_p(io)
-       Lazy_CdgP_n(io) = matmul(Cl_n(io)%dgr(),P_n)
-       if(PBCdmrg)Lazy_CdgP_p(io) = matmul(Cl_p(io)%dgr(),P_p)
+    allocate(Lazy_CdgP_n(size(setup_Cl_n)),Lazy_CdgP_p(size(setup_Cl_p)))
+    allocate(Lazy_Cr_n(size(setup_Cr_n)),Lazy_Cr_p(size(setup_Cr_p)))
+    do io=1,size(setup_Cl_n)
+       Lazy_CdgP_n(io) = setup_Cl_n(io)
+       Lazy_Cr_n(io) = setup_Cr_n(io)
+       Lazy_CdgP_p(io) = setup_Cl_p(io)
+       Lazy_Cr_p(io) = setup_Cr_p(io)
     enddo
   end subroutine setup_lazy_fermion_operators
 
@@ -1107,7 +1111,7 @@ contains
     t0=t_start()
     type=str(left%type())
     sector: do k=1,size(sb_sector)
-       Hrk = sp_filter(Lazy_Hr,SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
+       Hrk = filter_right_operator(Lazy_Hr,k,k)
        do il=1,Dls(k)
           do ir=1,Drs(k)
              i = ir + (il-1)*Drs(k) + offset(k)
@@ -1120,7 +1124,7 @@ contains
           enddo
        enddo
        call Hrk%free()
-       Hlk = sp_filter(Lazy_Hl,SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
+       Hlk = filter_left_operator(Lazy_Hl,k,k)
        do ir=1,Drs(k)
           do il=1,Dls(k)
              i = ir + (il-1)*Drs(k) + offset(k)
@@ -1136,16 +1140,16 @@ contains
        qn = sb_sector%qn(index=k)
        select case(to_lower(type(1:1)))
        case("s")
-          Aop = HopH(1,1)*sp_filter(Lazy_Sl_n(1),SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
-          Bop = sp_filter(Lazy_Sr_n(1),SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
+          Aop = HopH(1,1)*filter_left_operator(Lazy_Sl_n(1),k,k)
+          Bop = filter_right_operator(Lazy_Sr_n(1),k,k)
           call apply_AxB_direct(Aop,Bop,Offset(k),Offset(k),v,Hv)
           call Aop%free();call Bop%free()
           dq = [1d0]
           qm = qn - dq
           if(sb_sector%has_qn(qm))then
              q = sb_sector%index(qn=qm)
-             Aop = HopH(2,2)*sp_filter(Lazy_Sl_n(2),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
-             Bop = sp_filter(hconjg(Lazy_Sr_n(2)),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
+             Aop = HopH(2,2)*filter_left_operator(Lazy_Sl_n(2),k,q)
+             Bop = filter_right_operator(hconjg(Lazy_Sr_n(2)),k,q)
              call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
              tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
              tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1153,15 +1157,15 @@ contains
              call Aop%free();call Bop%free()
           endif
           if(PBCdmrg)then
-             Aop = HopH(1,1)*sp_filter(Lazy_Sl_p(1),SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
-             Bop = sp_filter(Lazy_Sr_p(1),SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
+             Aop = HopH(1,1)*filter_left_operator(Lazy_Sl_p(1),k,k)
+             Bop = filter_right_operator(Lazy_Sr_p(1),k,k)
              call apply_AxB_direct(Aop,Bop,Offset(k),Offset(k),v,Hv)
              call Aop%free();call Bop%free()
              qm = qn - [1d0]
              if(sb_sector%has_qn(qm))then
                 q = sb_sector%index(qn=qm)
-                Aop = HopH(2,2)*sp_filter(Lazy_Sl_p(2),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
-                Bop = sp_filter(hconjg(Lazy_Sr_p(2)),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
+                Aop = HopH(2,2)*filter_left_operator(Lazy_Sl_p(2),k,q)
+                Bop = filter_right_operator(hconjg(Lazy_Sr_p(2)),k,q)
                 call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
                 tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                 tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1193,16 +1197,16 @@ contains
                    io = iorb+(ispin-1)*Norb
                    jo = jorb+(ispin-1)*Norb
                    if(HopH(io,jo)==zero)cycle
-                   Aop = HopH(io,jo)*sp_filter(Lazy_CdgP_n(io),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
-                   Bop = sp_filter(Lazy_Cr_n(jo),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
+                   Aop = HopH(io,jo)*filter_left_operator(Lazy_CdgP_n(io),k,q)
+                   Bop = filter_right_operator(Lazy_Cr_n(jo),k,q)
                    call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
                    tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                    tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
                    call apply_AxB_direct(Aop,Bop,Offset(q),Offset(k),v,Hv)
                    call Aop%free();call Bop%free()
                    if(PBCdmrg)then
-                      Aop = HopH(io,jo)*sp_filter(Lazy_CdgP_p(io),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
-                      Bop = sp_filter(Lazy_Cr_p(jo),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
+                      Aop = HopH(io,jo)*filter_left_operator(Lazy_CdgP_p(io),k,q)
+                      Bop = filter_right_operator(Lazy_Cr_p(jo),k,q)
                       call apply_AxB_direct(Aop,Bop,Offset(k),Offset(q),v,Hv)
                       tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                       tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1245,7 +1249,7 @@ contains
     t0=t_start()
     type=str(left%type())
     sector: do k=1,size(sb_sector)
-       Hrk = sp_filter(Lazy_Hr,SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
+       Hrk = filter_right_operator(Lazy_Hr,k,k)
        do il=1,mpiDls(k)
           do ir=1,Drs(k)
              i = ir + (il-1)*Drs(k) + mpiOffset(k)
@@ -1258,7 +1262,7 @@ contains
           enddo
        enddo
        call Hrk%free()
-       Hlk = sp_filter(Lazy_Hl,SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
+       Hlk = filter_left_operator(Lazy_Hl,k,k)
        allocate(vt(mpiDrs(k)*Dls(k)));vt=zero
        allocate(Hvt(mpiDrs(k)*Dls(k)));Hvt=zero
        i_start = 1 + mpiOffset(k)
@@ -1283,16 +1287,16 @@ contains
        qn = sb_sector%qn(index=k)
        select case(to_lower(type(1:1)))
        case("s")
-          Aop = HopH(1,1)*sp_filter(Lazy_Sl_n(1),SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
-          Bop = sp_filter(Lazy_Sr_n(1),SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
+          Aop = HopH(1,1)*filter_left_operator(Lazy_Sl_n(1),k,k)
+          Bop = filter_right_operator(Lazy_Sr_n(1),k,k)
           call apply_AxB_MPI_direct(Aop,Bop,k,k,0,v,Hv)
           call Aop%free();call Bop%free()
           dq = [1d0]
           qm = qn - dq
           if(sb_sector%has_qn(qm))then
              q = sb_sector%index(qn=qm)
-             Aop = HopH(2,2)*sp_filter(Lazy_Sl_n(2),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
-             Bop = sp_filter(hconjg(Lazy_Sr_n(2)),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
+             Aop = HopH(2,2)*filter_left_operator(Lazy_Sl_n(2),k,q)
+             Bop = filter_right_operator(hconjg(Lazy_Sr_n(2)),k,q)
              call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
              tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
              tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1300,15 +1304,15 @@ contains
              call Aop%free();call Bop%free()
           endif
           if(PBCdmrg)then
-             Aop = HopH(1,1)*sp_filter(Lazy_Sl_p(1),SBleft_states(k)%states,SBleft_maps(k)%states,size(SBleft_states(k)%states))
-             Bop = sp_filter(Lazy_Sr_p(1),SBright_states(k)%states,SBright_maps(k)%states,size(SBright_states(k)%states))
+             Aop = HopH(1,1)*filter_left_operator(Lazy_Sl_p(1),k,k)
+             Bop = filter_right_operator(Lazy_Sr_p(1),k,k)
              call apply_AxB_MPI_direct(Aop,Bop,k,k,0,v,Hv)
              call Aop%free();call Bop%free()
              qm = qn - [1d0]
              if(sb_sector%has_qn(qm))then
                 q = sb_sector%index(qn=qm)
-                Aop = HopH(2,2)*sp_filter(Lazy_Sl_p(2),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
-                Bop = sp_filter(hconjg(Lazy_Sr_p(2)),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
+                Aop = HopH(2,2)*filter_left_operator(Lazy_Sl_p(2),k,q)
+                Bop = filter_right_operator(hconjg(Lazy_Sr_p(2)),k,q)
                 call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
                 tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                 tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
@@ -1340,16 +1344,16 @@ contains
                    io = iorb+(ispin-1)*Norb
                    jo = jorb+(ispin-1)*Norb
                    if(HopH(io,jo)==zero)cycle
-                   Aop = HopH(io,jo)*sp_filter(Lazy_CdgP_n(io),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
-                   Bop = sp_filter(Lazy_Cr_n(jo),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
+                   Aop = HopH(io,jo)*filter_left_operator(Lazy_CdgP_n(io),k,q)
+                   Bop = filter_right_operator(Lazy_Cr_n(jo),k,q)
                    call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
                    tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                    tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
                    call apply_AxB_MPI_direct(Aop,Bop,k,q,1,v,Hv)
                    call Aop%free();call Bop%free()
                    if(PBCdmrg)then
-                      Aop = HopH(io,jo)*sp_filter(Lazy_CdgP_p(io),SBleft_states(k)%states,SBleft_maps(q)%states,size(SBleft_states(q)%states))
-                      Bop = sp_filter(Lazy_Cr_p(jo),SBright_states(k)%states,SBright_maps(q)%states,size(SBright_states(q)%states))
+                      Aop = HopH(io,jo)*filter_left_operator(Lazy_CdgP_p(io),k,q)
+                      Bop = filter_right_operator(Lazy_Cr_p(jo),k,q)
                       call apply_AxB_MPI_direct(Aop,Bop,k,q,0,v,Hv)
                       tmpOp = hconjg(Aop); call Aop%free(); Aop = tmpOp; call tmpOp%free()
                       tmpOp = hconjg(Bop); call Bop%free(); Bop = tmpOp; call tmpOp%free()
