@@ -122,7 +122,6 @@ MODULE DMRG_GLOBAL
   type(tstates),allocatable,dimension(:)         :: SBleft_states,SBright_states
   type(tstates),allocatable,dimension(:)         :: SBleft_maps,SBright_maps
   type(sparse_matrix)                            :: Lazy_Hl,Lazy_Hr
-  type(sparse_matrix)                            :: Lazy_Pn,Lazy_Pp
   type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Sl_n,Lazy_Sr_n
   type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Sl_p,Lazy_Sr_p
   type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Cr_n,Lazy_Cr_p
