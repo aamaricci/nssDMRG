@@ -24,6 +24,7 @@ The structure of this code is largely inspired by the excellent simple-DMRG proj
   - [Milestone 8](#milestone8) Profiling and `Block` I/O restart.
   - [Milestone 9](#milestone9) Implement Periodic Boundary Conditions.
   - [Milestone 10](#milestone10) Fix Symmetry Fragmentation using MPI sub-communicators.
+  - [Milestone 11](#milestone11) Lazy direct MVP operator filtering.
 - [Results](#results)
     
 ## <a name="dependencies"></a> Dependencies
@@ -187,6 +188,31 @@ $$
  This way we can ensure that each node has a more balanced workload and we can optimize the communication patterns accordingly. The implementation of this strategy required just few modifications to the existing code, essentially concentrated in the MPI matrix-vector product and `vector_transpose_MPI` function, where the communication is performed. 
 
  
+### <a name="milestone11"></a> Milestone 11
+- [x] **Implement lazy direct MVP operator filtering to reduce the memory footprint of large SuperBlock calculations.**
+
+<sup>The direct matrix-vector product introduced in [milestone 5](#milestone5) and parallelized in [milestone 7](#milestone7) avoids constructing the full sparse SuperBlock Hamiltonian. However, in its cached form it still precomputes and stores, for every SuperBlock quantum-number sector $q$, all filtered blocks of the enlarged operators entering the MVP:
+$$
+H_L(q),\quad H_R(q),\quad A_a(q,k),\quad B_a(q,k).
+$$
+This is efficient in CPU time, because the Lanczos/ARPACK iteration can reuse these sector-restricted sparse matrices, but it can become memory limited when the number of kept states and the number of quantum-number sectors grow. In particular, the cached direct workflow may require memory comparable to a second copy of the enlarged operator content, distributed and then gathered across MPI ranks.</sup>
+
+<sup>To address this regime we introduced an optional lazy direct MVP mode, controlled by the input variable `DIRECT_H_LAZY`. The relevant choices are now:</sup>
+
+* `SPARSE_H = T`: <sup>build and apply the sparse SuperBlock Hamiltonian $H_{sb}$.</sup>
+* `SPARSE_H = F`, `DIRECT_H_LAZY = F`: <sup>use the direct MVP with cached filtered operator blocks. This is the fastest direct mode, but stores all $H_L(q)$, $H_R(q)$, $A_a(q,k)$ and $B_a(q,k)$ blocks.</sup>
+* `SPARSE_H = F`, `DIRECT_H_LAZY = T`: <sup>use the direct MVP with lazy sector filtering. Only the original enlarged block operators and light sector maps are kept persistently; the filtered operator blocks required by a given MVP term are constructed on the fly, applied, and immediately released.</sup>
+
+<sup>In the lazy workflow the SuperBlock setup stores the sector state lists and inverse maps associated with the left and right block bases. The MVP then obtains the required restricted operators through local filtering operations such as:
+$$
+O(q,k) = O_{\mathrm{full}}\big|_{{\cal H}(q)\rightarrow{\cal H}(k)}
+$$
+only at the moment when that contribution is applied to the vector. Thus the memory scaling is governed by the original block operators plus the largest temporary filtered blocks needed for a single term, rather than by the sum over all terms and all SuperBlock sectors. The price is additional CPU time due to repeated filtering during the iterative eigensolver.</sup>
+
+<sup>For fermionic models the left boundary hopping operators are prepared directly in the contracted form $c^\dagger_{L,\alpha}P_L$, where $P_L$ is the fermionic sign/parity operator and $\alpha$ labels spin-orbital flavor and link direction. This avoids repeatedly forming the sparse product $c^\dagger P$ inside each MVP call. The lazy implementation also reuses cached inverse sector maps so that the filtering operation does not rebuild the same global-to-sector lookup arrays at every application.</sup>
+
+<sup>The practical goal of `DIRECT_H_LAZY = T` is therefore to trade repeated sparse filtering work for a substantially smaller persistent memory footprint. This is useful when the calculation is memory-bound rather than CPU-bound, and especially when additional MPI ranks or threads can compensate for the slower MVP while enabling larger retained-state spaces.</sup>
+
 
 
 ## <a name="results"></a> Results
