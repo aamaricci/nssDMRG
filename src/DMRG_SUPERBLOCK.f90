@@ -557,15 +557,27 @@ contains
           !
        case(.false.)
           call Setup_SuperBlock_Direct() !<- SETUP MPI here
-          spHtimesV_p => spMatVec_direct_main
+          if(direct_H_lazy)then
+             spHtimesV_p => spMatVec_direct_lazy_main
+          else
+             spHtimesV_p => spMatVec_direct_main
+          endif
 #ifdef _MPI
           if(MpiStatus)then
              call sb_check_Hv(fMPI)
              if(fMPI)then  !this is true for all nodes at once see sb_vecDim_Hv
                 write(LogFile,"(A)")"ARPACK: using SERIAL over MPI as MpiSize > N"
-                spHtimesV_p => spMatVec_direct_main
+                if(direct_H_lazy)then
+                   spHtimesV_p => spMatVec_direct_lazy_main
+                else
+                   spHtimesV_p => spMatVec_direct_main
+                endif
              else
-                spHtimesV_p => spMatVec_MPI_direct_main
+                if(direct_H_lazy)then
+                   spHtimesV_p => spMatVec_MPI_direct_lazy_main
+                else
+                   spHtimesV_p => spMatVec_MPI_direct_main
+                endif
              endif
           endif
 #endif
@@ -608,6 +620,30 @@ contains
           call B(i,j)%free()
        enddo
        deallocate(B)
+    endif
+    if(allocated(SBleft_states))deallocate(SBleft_states)
+    if(allocated(SBright_states))deallocate(SBright_states)
+    call Lazy_Hl%free()
+    call Lazy_Hr%free()
+    call Lazy_Pn%free()
+    call Lazy_Pp%free()
+    if(allocated(Lazy_Sl_n))then
+       do concurrent(i=1:size(Lazy_Sl_n))
+          call Lazy_Sl_n(i)%free()
+          call Lazy_Sr_n(i)%free()
+          call Lazy_Sl_p(i)%free()
+          call Lazy_Sr_p(i)%free()
+       enddo
+       deallocate(Lazy_Sl_n,Lazy_Sr_n,Lazy_Sl_p,Lazy_Sr_p)
+    endif
+    if(allocated(Lazy_Cl_n))then
+       do concurrent(i=1:size(Lazy_Cl_n))
+          call Lazy_Cl_n(i)%free()
+          call Lazy_Cr_n(i)%free()
+          call Lazy_Cl_p(i)%free()
+          call Lazy_Cr_p(i)%free()
+       enddo
+       deallocate(Lazy_Cl_n,Lazy_Cr_n,Lazy_Cl_p,Lazy_Cr_p)
     endif
     !
     call sb_delete_dims()
@@ -728,7 +764,6 @@ function sb_vecDim_Hv() result(vecDim)
 
 
 END MODULE DMRG_SUPERBLOCK
-
 
 
 

@@ -77,6 +77,8 @@ MODULE INPUT_VARS
   logical                      :: sparse_H
   !flag to select  storage of sparse matrix H (mem--, cpu++) if TRUE,
   !or direct on-the-fly H*v product (mem++, cpu--
+  logical                      :: direct_H_lazy
+  !flag to use lazy filtering of direct H*v operator blocks (mem--, cpu++)
   integer                      :: verbose
   !Flag to control verbosity of the library
   ! character(len=12)            :: lanc_method
@@ -268,6 +270,9 @@ contains
     call parse_input_variable(sparse_H,"SPARSE_H",INPUTunit,&
          default=.false.,&
          comment="Sparse H*v: True = allocate sparse; False=direct product using QN decomposition")
+    call parse_input_variable(direct_H_lazy,"DIRECT_H_LAZY",INPUTunit,&
+         default=.false.,&
+         comment="Direct H*v: True = lazily filter QN operator blocks during MVP; False=cache filtered operator blocks")
     !
     !> Lanczos parameters:
     ! call parse_input_variable(lanc_method,"LANC_METHOD",INPUTunit,default="arpack",&
