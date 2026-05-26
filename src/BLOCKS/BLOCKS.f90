@@ -311,16 +311,10 @@ contains
     integer,dimension(size(self%sectors)) :: Dims
     !
     integer                               :: i
-    type(sparse_matrix)                   :: ope
-    type(operators_list)                  :: op
 
     nobasis_=.false.;if(present(nobasis))nobasis_=nobasis
     !
     bool = self%operators%is_valid(self%Dim)
-    op = self%operators
-    do i=1,size(op)
-       ope = op%op(index=i)
-    enddo
     if(nobasis_)return
     do i=1,size(self%sectors)
        Dims(i) = dim(self%sectors(i))

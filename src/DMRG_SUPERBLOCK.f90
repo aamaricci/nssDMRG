@@ -388,7 +388,6 @@ contains
                   Nblock,&
                   Nitermax,&
                   tol=lanc_tolerance,&
-                  vrandom=(.not.lanc_v0_dble),&
                   iverbose=(verbose>4),NumOp=NumOp)
              call Bcast_MPI(MpiComm,gs_energy)
              call scatter_vector_MPI(MpiComm,gs_tmp,gs_vector)
@@ -398,7 +397,6 @@ contains
                   Nblock,&
                   Nitermax,&
                   tol=lanc_tolerance,&
-                  vrandom=(.not.lanc_v0_dble),&
                   iverbose=(verbose>4),NumOp=NumOp)
           endif
        else
@@ -406,7 +404,6 @@ contains
                Nblock,&
                Nitermax,&
                tol=lanc_tolerance,&
-               vrandom=(.not.lanc_v0_dble),&
                iverbose=(verbose>4),NumOp=NumOp)
        endif
 #else
@@ -414,7 +411,6 @@ contains
             Nblock,&
             Nitermax,&
             tol=lanc_tolerance,&
-            vrandom=(.not.lanc_v0_dble),&
             iverbose=(verbose>4),NumOp=NumOp)
 #endif
        if(MpiMaster)call stop_timer("Diag H_sb")

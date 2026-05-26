@@ -101,9 +101,9 @@ MODULE INPUT_VARS
   integer                      :: lanc_dim_threshold
   !Min dimension threshold to use Lanczos determination of the
   !spectrum rather than Lapack based exact diagonalization.
-  logical                      :: lanc_v0_dble
-  !Set the initial vector used in Arpack to be identical to 1d0/N. This is an experimental feature
-  !used to enforce: i) the same starting point, ii) Hermiticity breaking in CMPLX code
+  ! logical                      :: lanc_v0_dble
+  ! !Set the initial vector used in Arpack to be identical to 1d0/N. This is an experimental feature
+  ! !used to enforce: i) the same starting point, ii) Hermiticity breaking in CMPLX code
   logical                      :: save_umat
   !flag to save Rotation matrices, default=T
   logical                      :: save_block
@@ -291,27 +291,27 @@ contains
          comment="Tolerance for the Lanczos iterations as used in Arpack and plain lanczos.")
     call parse_input_variable(lanc_dim_threshold,"LANC_DIM_THRESHOLD",INPUTunit,&
          default=1024,comment="Dimension threshold for Lapack use.")
-    call parse_input_variable(lanc_v0_dble,"LANC_V0_dble",INPUTunit,default=.false.,&
-         comment="Set the initial vector in Arpack to 1d0/N. Experimental feature ensuring i) same starting point, ii) fix Hermiticity breaking in CMPLX code")
+    ! call parse_input_variable(lanc_v0_dble,"LANC_V0_dble",INPUTunit,default=.false.,&
+    !      comment="Set the initial vector in Arpack to 1d0/N. Experimental feature ensuring i) same starting point, ii) fix Hermiticity breaking in CMPLX code")
     !
     !>Save Blocks:
     call parse_input_variable(save_block,"SAVE_BLOCK",INPUTunit,default=.true.,&
          comment="Logical flag to trigger block storage. DEBUG enforces T. Default: T")
     call parse_input_variable(save_all_blocks,"SAVE_ALL_BLOCKS",INPUTunit,default=.false.,&
          comment="Logical flag to save all blocks (T) or just the last (F). DEBUG enforces T. Default: F")
-    call parse_input_variable(block_file_,"BLOCK_FILE",INPUTunit,default='block',&
-         comment="Name prefix of the stored block file, used to restart DMRG.")
-    block_file=str(block_file_)
     !
     !>Save U matrices:
     call parse_input_variable(block_umat_cache,"BLOCK_UMAT_CACHE",INPUTunit,default=.false.,&
          comment="Logical flag to keep all rotation matrices in the block memory. Default=F to save memory.")
     call parse_input_variable(save_umat,"SAVE_UMAT",INPUTunit,default=.true.,&
          comment="Logical flag to save rotation matrices to file. Default=T")
+    !
+    call parse_input_variable(block_file_,"BLOCK_FILE",INPUTunit,default='block',&
+         comment="Name prefix of the stored block file, used to restart DMRG.")
+    block_file=str(block_file_)
     call parse_input_variable(umat_file_,"UMAT_FILE",INPUTunit,default='umat',&
          comment="Name suffix of the stored rotation matrices, used to measure in DMRG.")
     umat_file=str(umat_file_)
-    !
     call parse_input_variable(lambdaQ_file_,"LAMBDAQ_FILE",INPUTunit,default='lambdaQ',&
          comment="Name of the prefix of the stored symmetry resolved RDMs eigenvalues file. ")
     lambdaQ_file=str(lambdaQ_file_)

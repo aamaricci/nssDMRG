@@ -129,8 +129,25 @@ contains
     if(allocated(Li))deallocate(Li)
     if(allocated(Ri))deallocate(Ri)
     call sb_delete_dims()
+    if(.not.block_umat_cache)call clear_measure_omatrices()
     measure_status=.false.
   end subroutine End_measure_DMRG
+
+
+  subroutine clear_measure_omatrices()
+    type(sparse_matrix) :: Ileft,Iright
+    !
+    if(MpiMaster)then
+       Ileft  = id(left%Dim)
+       Iright = id(right%Dim)
+       call left%omatrices%free()
+       call right%omatrices%free()
+       call left%put_omat("1",Ileft,"")
+       call right%put_omat("1",Iright,"")
+       call Ileft%free()
+       call Iright%free()
+    endif
+  end subroutine clear_measure_omatrices
 
 
 
