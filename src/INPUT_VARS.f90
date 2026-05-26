@@ -110,8 +110,8 @@ MODULE INPUT_VARS
   !flag to trigger block storage to file
   logical                      :: save_all_blocks
   !flag to save all blocks or just the last one (true if Build_type=DEBUG)
-  character(len=1)             :: store_umat
-  !index flag to save (and retrieve) Rotation matrices
+  logical                      :: block_umat_cache
+  !flag to keep rotation matrices in memory inside block objects
   character(len=:),allocatable :: umat_file
   !Name prefix of the stored Umatrix file, used to restart DMRG.
   character(len=:),allocatable :: block_file
@@ -210,11 +210,11 @@ contains
          default='normal',&
          comment="Flag to set DMRG type: normal=normal, superc=superconductive, nonsu2=broken SU(2)")
 
-     call parse_input_variable(QNtruncation_error,"QNtruncation_error",INPUTunit,&
+    call parse_input_variable(QNtruncation_error,"QNtruncation_error",INPUTunit,&
          default=0d0,&
          comment="Threshold error on the the symmetry sector RDM truncation: W_k=sum_{i\in QN(k) w_i < QNtruncation_error are excluded")
 
-     call parse_input_variable(QNtruncation_dim,"QNtruncation_dim",INPUTunit,&
+    call parse_input_variable(QNtruncation_dim,"QNtruncation_dim",INPUTunit,&
          default=1,&
          comment="Threshold dimension on the symmetry sector RDM truncation: dim(QN(k)<QNtruncation_dim are excluded.")
 
@@ -294,29 +294,27 @@ contains
     call parse_input_variable(lanc_v0_dble,"LANC_V0_dble",INPUTunit,default=.false.,&
          comment="Set the initial vector in Arpack to 1d0/N. Experimental feature ensuring i) same starting point, ii) fix Hermiticity breaking in CMPLX code")
     !
-    !>Save Blocks tuning:
-    call parse_input_variable(save_umat,"SAVE_UMAT",INPUTunit,default=.true.,&
-         comment="Logical flag to save Rotation matrices, default=T.")
+    !>Save Blocks:
     call parse_input_variable(save_block,"SAVE_BLOCK",INPUTunit,default=.true.,&
-         comment="Logical flag to trigger block storage. DEBUG enforces T ")
-    !
+         comment="Logical flag to trigger block storage. DEBUG enforces T. Default: T")
     call parse_input_variable(save_all_blocks,"SAVE_ALL_BLOCKS",INPUTunit,default=.false.,&
-         comment="Logical flag to save all blocks (T) or just the last (F, default). DEBUG enforces T")
-    !
-    call parse_input_variable(store_umat,"STORE_UMAT",INPUTunit,default='b',&
-         comment="Chr flag to save (and retrieve) Rotation matrices: b=Block, f=File")
-    !
-    call parse_input_variable(umat_file_,"UMAT_FILE",INPUTunit,default='umat',&
-         comment="Name suffix of the stored rotation matrices, used to measure in DMRG.")
-    umat_file=str(umat_file_)
+         comment="Logical flag to save all blocks (T) or just the last (F). DEBUG enforces T. Default: F")
     call parse_input_variable(block_file_,"BLOCK_FILE",INPUTunit,default='block',&
          comment="Name prefix of the stored block file, used to restart DMRG.")
     block_file=str(block_file_)
+    !
+    !>Save U matrices:
+    call parse_input_variable(block_umat_cache,"BLOCK_UMAT_CACHE",INPUTunit,default=.false.,&
+         comment="Logical flag to keep all rotation matrices in the block memory. Default=F to save memory.")
+    call parse_input_variable(save_umat,"SAVE_UMAT",INPUTunit,default=.true.,&
+         comment="Logical flag to save rotation matrices to file. Default=T")
+    call parse_input_variable(umat_file_,"UMAT_FILE",INPUTunit,default='umat',&
+         comment="Name suffix of the stored rotation matrices, used to measure in DMRG.")
+    umat_file=str(umat_file_)
+    !
     call parse_input_variable(lambdaQ_file_,"LAMBDAQ_FILE",INPUTunit,default='lambdaQ',&
          comment="Name of the prefix of the stored symmetry resolved RDMs eigenvalues file. ")
     lambdaQ_file=str(lambdaQ_file_)
-
-    !
     !
     !    
     call parse_input_variable(LOGfile,"LOGFILE",INPUTunit,default=6,comment="LOG unit.")
@@ -325,12 +323,6 @@ contains
     save_block      =.true.
     save_all_blocks =.true.
 #endif
-    !
-    store_umat=to_lower(store_umat)
-    select case(store_umat)
-    case('b','f');continue
-    case default;stop "Input error: store_umat!=[b,f]"
-    end select
     !
     call set_store_size(1)
     !

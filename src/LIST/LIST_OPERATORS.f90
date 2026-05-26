@@ -519,6 +519,7 @@ contains
     type(optype),pointer                :: c
     !
     bool=.false.
+    if(.not.associated(self%root))return
     c => self%root%next
     do                            !traverse the list until index is found
        if(.not.associated(c))exit
@@ -613,6 +614,10 @@ contains
     if(unit_==-1)stop "write_operators_list error: no input +file or +unit given"
     !
     write(unit_,*)self%size
+    if(.not.associated(self%root))then
+       if(present(file))close(unit_)
+       return
+    endif
     c => self%root%next
     do
        if(.not.associated(c))exit

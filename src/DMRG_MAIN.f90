@@ -308,11 +308,11 @@ contains
     if(save_block)then
        if(MpiMaster)then
           if(save_all_blocks)then
-             call left%save(suffix_dmrg('left',left%length,type)//".restart",gzip=.true.)
-             call right%save(suffix_dmrg('right',right%length,type)//".restart",gzip=.true.)
+             call left%save(suffix_dmrg('left',left%length,type)//".restart",gzip=.true.,include_omatrices=.false.)
+             call right%save(suffix_dmrg('right',right%length,type)//".restart",gzip=.true.,include_omatrices=.false.)
           else
-             if(left%length==Ldmrg-1) call left%save(suffix_dmrg('left',type=type)//".restart",gzip=.true.)
-             if(right%length==Ldmrg-1)call right%save(suffix_dmrg('right',type=type)//".restart",gzip=.true.)
+             call left%save(suffix_dmrg('left',type=type)//".restart",gzip=.true.,include_omatrices=.false.)
+             call right%save(suffix_dmrg('right',type=type)//".restart",gzip=.true.,include_omatrices=.false.)
           endif
        endif
     endif

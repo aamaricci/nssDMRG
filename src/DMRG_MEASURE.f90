@@ -59,6 +59,11 @@ contains
 #endif
 #endif
     !
+    if(MpiMaster)then
+       if(size(left%omatrices)<=1)call left%load_umat(suffix_dmrg('left')//".restart",left%length)
+       if(size(right%omatrices)<=1)call right%load_umat(suffix_dmrg('right')//".restart",right%length)
+    endif
+    !
     if(MpiMaster)omat_dims = [size(left%omatrices),size(right%omatrices)]
 #ifdef _MPI
     call Bcast_MPI(MpiComm,omat_dims)

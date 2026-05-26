@@ -183,14 +183,17 @@ contains
 
 
 
-  subroutine write_omat_block(self,key,op,type,suffix)
+  subroutine write_omat_block(self,key,op,type,suffix,append)
     class(block)                   :: self
     character(len=*),intent(in)    :: key
     type(sparse_matrix),intent(in) :: op
     character(len=*),intent(in)    :: type
     character(len=*),intent(in)    :: suffix
+    logical,optional               :: append
     integer :: unit
-    unit = fopen(str(umat_file)//str(suffix),append=.true.)
+    logical :: append_
+    append_=.true.;if(present(append))append_=append
+    unit = fopen(str(umat_file)//str(suffix),append=append_)
     write(unit,*)str(key)
     if(str(type)=="")then
        write(unit,*)"none"
@@ -415,10 +418,15 @@ contains
 
 
 
-  subroutine write_block(self,suffix)
+  subroutine write_block(self,suffix,include_omatrices)
     class(block)              :: self
     character(len=*)          :: suffix
+    logical,optional          :: include_omatrices
     integer                   :: Bunit,Uunit
+    logical                   :: include_omatrices_
+    type(operators_list)      :: omatrices
+    type(sparse_matrix)       :: eye_op
+    include_omatrices_=.false.;if(present(include_omatrices))include_omatrices_=include_omatrices
     !
     open(free_unit(Bunit),file=str(block_file)//str(suffix) )
     !
@@ -439,8 +447,21 @@ contains
     !Operators
     call self%operators%write(unit=Bunit)
     !
-    !Omatrices
-    call self%omatrices%write(unit=Bunit)
+    !Omatrices: DMRG restart files should omit accumulated rotations,
+    !which are checkpointed separately in UMAT_FILE files. The optional
+    !argument is kept for low-level/manual block dumps only.
+    if(include_omatrices_)then
+       call self%omatrices%write(unit=Bunit)
+    else
+       !This is an initialization
+       if(self%omatrices%has_key("1"))then
+          eye_op = self%omatrices%op(key="1")
+          call omatrices%put("1",eye_op,"")
+          call eye_op%free()
+       endif
+       call omatrices%write(unit=Bunit)
+       call omatrices%free()
+    endif
     !
     close(Bunit)
     !
@@ -449,16 +470,17 @@ contains
 
 
 
-  subroutine save_block(self,suffix,gzip)
+  subroutine save_block(self,suffix,gzip,include_omatrices)
     class(block)     :: self
     character(len=*) :: suffix
+    logical,optional :: include_omatrices
     integer          :: unit_
     logical          :: gzip,fbool
-    call self%write(str(suffix))
+    logical          :: include_omatrices_
+    include_omatrices_=.false.;if(present(include_omatrices))include_omatrices_=include_omatrices
+    call self%write(str(suffix),include_omatrices=include_omatrices_)
     if(gzip)then
        call file_gzip(str(block_file)//str(suffix))
-       inquire(file=str(umat_file)//str(suffix), exist=fbool)
-       if(fbool)call file_gzip(str(umat_file)//str(suffix))
     endif
   end subroutine save_block
 
@@ -468,9 +490,10 @@ contains
 
 
 
-  subroutine read_block(self,suffix)
+  subroutine read_block(self,suffix,load_umat)
     class(block)                   :: self
     character(len=*)               :: suffix
+    logical,optional               :: load_umat
     integer                        :: Bunit,Uunit
     integer                        :: SectorSize
     integer                        :: length,il
@@ -482,6 +505,8 @@ contains
     character(len=32)              :: OpName,key,type,tag
     character(len=32)              :: SiteType
     logical                        :: fbool
+    logical                        :: load_umat_
+    load_umat_=.false.;if(present(load_umat))load_umat_=load_umat
     !
     open(free_unit(Bunit),file=str(block_file)//str(suffix) )
     !
@@ -504,24 +529,10 @@ contains
     !
     !Omatrices
     call omatrices%read(unit=Bunit)
-    !if no Umat are included then it reads only the '1'.
-    !try to read the rest from file. however this is enough
-    !to restart basic calculation, not to measure.
-    inquire(file=str(umat_file)//str(suffix), exist=fbool)
-    if(fbool)then
-       open(free_unit(Uunit),file=str(umat_file)//str(suffix))
-       do il=2,length
-          read(Uunit,*)key
-          read(Uunit,*)type
-          call umat%read(unit=Uunit)
-          call omatrices%put(str(key),umat,str(type))
-       enddo
-       call umat%free()
-       close(Uunit)
-    endif
+    if(load_umat_)call read_umat_files(omatrices,suffix,length)
     !
     if(size(omatrices)/=length)then
-       write(LOGfile,*)"read_block WARNING: could not read self.omatrices. No measurements will be possible."
+       if(load_umat_)write(LOGfile,*)"read_block WARNING: could not read self.omatrices. No measurements will be possible."
     endif
     !
     !
@@ -539,11 +550,14 @@ contains
 
 
 
-  subroutine load_block(self,suffix)
+  subroutine load_block(self,suffix,load_umat)
     class(block)     :: self
     character(len=*) :: suffix
+    logical,optional :: load_umat
     logical          :: bool,gzbool
+    logical          :: load_umat_
     logical :: master=.true.
+    load_umat_=.false.;if(present(load_umat))load_umat_=load_umat
     !
 #ifdef _MPI
     if(check_MPI())master  = get_master_MPI()
@@ -554,11 +568,9 @@ contains
     if(.not.bool)return
     if(master)write(LOGfile,*)"Loading from: "//str(block_file)//str(suffix)
     !
-    !Check if umat_file exists:
-    inquire(file=str(umat_file)//str(suffix), exist=bool)
-    if(bool.and.master)write(LOGfile,*)"Loading from: "//str(umat_file)//str(suffix)
+    if(load_umat_.and.master)write(LOGfile,*)"Loading rotation matrices from: "//str(umat_file)//"*"
     !
-    call self%read(str(suffix))
+    call self%read(str(suffix),load_umat=load_umat_)
     !
   end subroutine load_block
 
@@ -567,12 +579,21 @@ contains
     class(block)                   :: self
     character(len=*)               :: suffix
     integer                        :: length
+    call read_umat_files(self%omatrices,suffix,length)
+  end subroutine load_umat_block
+
+
+  subroutine read_umat_files(omatrices,suffix,length)
+    type(operators_list)           :: omatrices
+    character(len=*)               :: suffix
+    integer                        :: length
     integer                        :: il,Uunit
     type(sparse_matrix)            :: umat
-    character(len=32)              :: OpName,key,type
-    character(len=32)              :: SiteType
+    character(len=32)              :: key,type
+    character(len=:),allocatable   :: file_suffix
     logical                        :: fbool
-    !to restart basic calculation, not to measure.
+    !
+    !Backward-compatible monolithic rotation file.
     inquire(file=str(umat_file)//str(suffix), exist=fbool)
     if(fbool)then
        open(free_unit(Uunit),file=str(umat_file)//str(suffix))
@@ -580,12 +601,44 @@ contains
           read(Uunit,*)key
           read(Uunit,*)type
           call umat%read(unit=Uunit)
-          call self%omatrices%put(str(key),umat,str(type))
+          call omatrices%put(str(key),umat,str(type))
        enddo
        call umat%free()
        close(Uunit)
+       return
     endif
-  end subroutine load_umat_block
+    !
+    !Current checkpoint format: one rotation file per block length.
+    do il=2,length
+       file_suffix = umat_suffix_from(str(suffix),il)
+       if(str(file_suffix)=="")cycle
+       inquire(file=str(umat_file)//str(file_suffix), exist=fbool)
+       if(.not.fbool)cycle
+       open(free_unit(Uunit),file=str(umat_file)//str(file_suffix))
+       read(Uunit,*)key
+       read(Uunit,*)type
+       call umat%read(unit=Uunit)
+       call omatrices%put(str(key),umat,str(type))
+       call umat%free()
+       close(Uunit)
+    enddo
+  end subroutine read_umat_files
+
+
+  function umat_suffix_from(suffix,length) result(file_suffix)
+    character(len=*),intent(in)    :: suffix
+    integer,intent(in)             :: length
+    character(len=:),allocatable   :: file_suffix
+    character(len=:),allocatable   :: suffix_
+    suffix_=to_lower(str(suffix))
+    if(index(suffix_,"left")>0)then
+       file_suffix=suffix_dmrg("left",length)//".restart"
+    elseif(index(suffix_,"right")>0)then
+       file_suffix=suffix_dmrg("right",length)//".restart"
+    else
+       file_suffix=""
+    endif
+  end function umat_suffix_from
 
 
 END MODULE BLOCKS

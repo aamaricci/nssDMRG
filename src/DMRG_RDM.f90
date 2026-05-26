@@ -220,12 +220,9 @@ contains
           truncation_error_left  = 1d0 - sum(rho_left_evals(1:m_s))
           trRho_left             = rho_left%sparse(m_left,m_s)
           !>Store all the rotation/truncation matrices:
-          if(save_umat)then
-             select case(store_umat)
-             case('b');call left%put_omat(str(left%length),trRho_left,'')
-             case('f');call left%write_omat(str(left%length),trRho_left,'',suffix_dmrg('left')//".restart")
-             end select
-          endif
+          if(block_umat_cache)call left%put_omat(str(left%length),trRho_left,'')
+          if(save_umat)call left%write_omat(str(left%length),trRho_left,'',&
+               suffix_dmrg('left',left%length)//".restart",append=.false.)
        endif
 #ifdef _MPI
        if(MpiStatus)call Bcast_MPI(MpiComm,m_s)
@@ -293,12 +290,9 @@ contains
           truncation_error_right = 1d0 - sum(rho_right_evals(1:m_e))
           trRho_right            = rho_right%sparse(m_right,m_e)
           !>Store all the rotation/truncation matrices:
-          if(save_umat)then
-             select case(store_umat)
-             case('b');call right%put_omat(str(right%length),trRho_right,'')
-             case('f');call right%write_omat(str(right%length),trRho_right,'',suffix_dmrg('right')//".restart")
-             end select
-          endif
+          if(block_umat_cache)call right%put_omat(str(right%length),trRho_right,'')
+          if(save_umat)call right%write_omat(str(right%length),trRho_right,'',&
+               suffix_dmrg('right',right%length)//".restart",append=.false.)
        endif
 #ifdef _MPI
        if(MpiStatus)call Bcast_MPI(MpiComm,m_e)
@@ -405,9 +399,6 @@ contains
 
 
 END MODULE DMRG_RDM
-
-
-
 
 
 
