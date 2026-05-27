@@ -52,6 +52,7 @@ contains
     character(len=*),optional        :: msg
     integer,dimension(2)             :: omat_dims
     integer                          :: ilat,i,f,m
+    logical                          :: found_measure_state
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: init measure"
 #ifdef _MPI
@@ -62,6 +63,13 @@ contains
     if(MpiMaster)then
        if(size(left%omatrices)<=1)call left%load_umat(suffix_dmrg('left')//".restart",left%length)
        if(size(right%omatrices)<=1)call right%load_umat(suffix_dmrg('right')//".restart",right%length)
+    endif
+    !
+    if((.not.allocated(sb_states)).or.(.not.allocated(gs_vector)).or.size(sb_sector)==0)then
+       call sb_load_measure_state(found_measure_state)
+       if(.not.found_measure_state)then
+          if(MpiMaster)write(LOGfile,*)"Init_Measure_DMRG: no saved SuperBlock measurement state found."
+       endif
     endif
     !
     if(MpiMaster)omat_dims = [size(left%omatrices),size(right%omatrices)]

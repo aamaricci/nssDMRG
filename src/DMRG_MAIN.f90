@@ -372,6 +372,7 @@ contains
     !#################################
     !In DMRG_SUPERBLOCK:
     call sb_diag()
+    if(save_measure_state)call sb_save_measure_state()
     !
     if(MpiMaster)then
        write(LOGfile,*)"- - - - - - - - - - - - - - - - - - - - -"

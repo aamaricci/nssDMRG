@@ -16,6 +16,8 @@ MODULE DMRG_SUPERBLOCK
   public :: sb_build_Hv
   public :: sb_vecDim_Hv
   public :: sb_delete_Hv
+  public :: sb_save_measure_state
+  public :: sb_load_measure_state
 
   integer :: ierr
   integer :: ispin
@@ -641,6 +643,88 @@ contains
     if(allocated(ColOffset))deallocate(ColOffset)
     !
   end subroutine sb_delete_Hv
+
+
+  subroutine sb_save_measure_state()
+    integer :: unit,Nstates,Nenergy,Nrow,Ncol,Nqn
+    character(len=:),allocatable :: file
+    !
+    if(.not.allocated(sb_states))return
+    if(.not.allocated(gs_vector))return
+    if(.not.allocated(gs_energy))return
+    !
+    file = measure_state_file()
+    open(free_unit(unit),file=str(file))
+    write(unit,*)"NSSDMRG_MEASURE_STATE_V1"
+    write(unit,*)MpiRank,MpiSize
+    write(unit,*)left%length,right%length,current_L
+    Nqn=size(current_target_qn)
+    write(unit,*)Nqn
+    write(unit,*)current_target_qn
+    Nstates=size(sb_states)
+    write(unit,*)Nstates
+    write(unit,*)sb_states
+    call sb_sector%write(unit=unit)
+    Nenergy=size(gs_energy)
+    write(unit,*)Nenergy
+    write(unit,*)gs_energy
+    Nrow=size(gs_vector,1)
+    Ncol=size(gs_vector,2)
+    write(unit,*)Nrow,Ncol
+    write(unit,*)gs_vector
+    close(unit)
+  end subroutine sb_save_measure_state
+
+
+  subroutine sb_load_measure_state(found)
+    logical,optional :: found
+    logical :: file_exists
+    integer :: unit,file_rank,file_size
+    integer :: left_length,right_length,stored_current_L
+    integer :: Nstates,Nenergy,Nrow,Ncol,Nqn
+    character(len=64) :: magic
+    character(len=:),allocatable :: file
+    !
+    file = measure_state_file()
+    inquire(file=str(file),exist=file_exists)
+    if(present(found))found=file_exists
+    if(.not.file_exists)return
+    !
+    open(free_unit(unit),file=str(file))
+    read(unit,*)magic
+    if(str(magic)/="NSSDMRG_MEASURE_STATE_V1")stop "sb_load_measure_state error: unsupported file format"
+    read(unit,*)file_rank,file_size
+    if(file_rank/=MpiRank)stop "sb_load_measure_state error: MPI rank mismatch"
+    if(file_size/=MpiSize)stop "sb_load_measure_state error: MPI size mismatch"
+    read(unit,*)left_length,right_length,stored_current_L
+    if(left_length/=left%length)stop "sb_load_measure_state error: left block length mismatch"
+    if(right_length/=right%length)stop "sb_load_measure_state error: right block length mismatch"
+    current_L = stored_current_L
+    read(unit,*)Nqn
+    if(allocated(current_target_qn))deallocate(current_target_qn)
+    allocate(current_target_qn(Nqn))
+    read(unit,*)current_target_qn
+    read(unit,*)Nstates
+    if(allocated(sb_states))deallocate(sb_states)
+    allocate(sb_states(Nstates))
+    read(unit,*)sb_states
+    call sb_sector%read(unit=unit)
+    read(unit,*)Nenergy
+    if(allocated(gs_energy))deallocate(gs_energy)
+    allocate(gs_energy(Nenergy))
+    read(unit,*)gs_energy
+    read(unit,*)Nrow,Ncol
+    if(allocated(gs_vector))deallocate(gs_vector)
+    allocate(gs_vector(Nrow,Ncol))
+    read(unit,*)gs_vector
+    close(unit)
+  end subroutine sb_load_measure_state
+
+
+  function measure_state_file() result(file)
+    character(len=:),allocatable :: file
+    file = str(measure_file)//".rank"//str(MpiRank)//".restart"
+  end function measure_state_file
 
 
 

@@ -106,6 +106,8 @@ MODULE INPUT_VARS
   ! !used to enforce: i) the same starting point, ii) Hermiticity breaking in CMPLX code
   logical                      :: save_umat
   !flag to save Rotation matrices, default=T
+  logical                      :: save_measure_state
+  !flag to save SuperBlock measurement state to file
   logical                      :: save_block
   !flag to trigger block storage to file
   logical                      :: save_all_blocks
@@ -118,6 +120,8 @@ MODULE INPUT_VARS
   !Name prefix of the stored block file, used to restart DMRG.
   character(len=:),allocatable :: lambdaQ_file   
   !Name of the prefix of the stored symmetry resolved RDMs eigenvalues file. 
+  character(len=:),allocatable :: measure_file
+  !Name prefix of the stored SuperBlock measurement state.
   !
   !Some parameters for function dimension:
   !=========================================================
@@ -149,6 +153,7 @@ contains
     character(len=256) :: block_file_
     character(len=256) :: umat_file_
     character(len=256) :: lambdaQ_file_
+    character(len=256) :: measure_file_
     logical          :: master=.true.
     integer          :: i,rank=0,add,dim
 #ifdef _MPI
@@ -305,6 +310,8 @@ contains
          comment="Logical flag to keep all rotation matrices in the block memory. Default=F to save memory.")
     call parse_input_variable(save_umat,"SAVE_UMAT",INPUTunit,default=.true.,&
          comment="Logical flag to save rotation matrices to file. Default=T")
+    call parse_input_variable(save_measure_state,"SAVE_MEASURE_STATE",INPUTunit,default=.true.,&
+         comment="Logical flag to save SuperBlock state for post-processing measures. Default=T")
     !
     call parse_input_variable(block_file_,"BLOCK_FILE",INPUTunit,default='block',&
          comment="Name prefix of the stored block file, used to restart DMRG.")
@@ -315,6 +322,9 @@ contains
     call parse_input_variable(lambdaQ_file_,"LAMBDAQ_FILE",INPUTunit,default='lambdaQ',&
          comment="Name of the prefix of the stored symmetry resolved RDMs eigenvalues file. ")
     lambdaQ_file=str(lambdaQ_file_)
+    call parse_input_variable(measure_file_,"MEASURE_FILE",INPUTunit,default='measure',&
+         comment="Name prefix of the stored SuperBlock measurement state.")
+    measure_file=str(measure_file_)
     !
     !    
     call parse_input_variable(LOGfile,"LOGFILE",INPUTunit,default=6,comment="LOG unit.")
