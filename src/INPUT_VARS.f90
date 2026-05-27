@@ -116,12 +116,22 @@ MODULE INPUT_VARS
   !flag to keep rotation matrices in memory inside block objects
   character(len=:),allocatable :: umat_file
   !Name prefix of the stored Umatrix file, used to restart DMRG.
+  character(len=:),allocatable :: umat_restart_file
+  !Name prefix of the input Umatrix file, used to restart/measure DMRG.
   character(len=:),allocatable :: block_file
   !Name prefix of the stored block file, used to restart DMRG.
+  character(len=:),allocatable :: block_restart_file
+  !Name prefix of the input block file, used to restart DMRG.
   character(len=:),allocatable :: lambdaQ_file   
   !Name of the prefix of the stored symmetry resolved RDMs eigenvalues file. 
   character(len=:),allocatable :: measure_file
   !Name prefix of the stored SuperBlock measurement state.
+  character(len=:),allocatable :: measure_restart_file
+  !Name prefix of the input SuperBlock measurement state.
+  character(len=:),allocatable :: restart_input_dir
+  !Directory used to read explicit restart files.
+  character(len=:),allocatable :: restart_output_dir
+  !Timestamped directory used to write restart files for this run.
   !
   !Some parameters for function dimension:
   !=========================================================
@@ -156,6 +166,7 @@ contains
     character(len=256) :: measure_file_
     logical          :: master=.true.
     integer          :: i,rank=0,add,dim
+    character(len=:),allocatable :: timestamp
 #ifdef _MPI
     if(check_MPI())then
        master=get_Master_MPI(MPI_COMM_WORLD)
@@ -315,16 +326,23 @@ contains
     !
     call parse_input_variable(block_file_,"BLOCK_FILE",INPUTunit,default='block',&
          comment="Name prefix of the stored block file, used to restart DMRG.")
-    block_file=str(block_file_)
+    timestamp = restart_timestamp()
+    restart_input_dir  = "restart/"
+    restart_output_dir = "restart_"//str(timestamp)//"/"
+    call execute_command_line("mkdir -p "//str(restart_output_dir))
+    block_restart_file = str(restart_input_dir)//str(block_file_)
+    block_file         = str(restart_output_dir)//str(block_file_)
     call parse_input_variable(umat_file_,"UMAT_FILE",INPUTunit,default='umat',&
          comment="Name suffix of the stored rotation matrices, used to measure in DMRG.")
-    umat_file=str(umat_file_)
+    umat_restart_file = str(restart_input_dir)//str(umat_file_)
+    umat_file         = str(restart_output_dir)//str(umat_file_)
     call parse_input_variable(lambdaQ_file_,"LAMBDAQ_FILE",INPUTunit,default='lambdaQ',&
          comment="Name of the prefix of the stored symmetry resolved RDMs eigenvalues file. ")
     lambdaQ_file=str(lambdaQ_file_)
     call parse_input_variable(measure_file_,"MEASURE_FILE",INPUTunit,default='measure',&
          comment="Name prefix of the stored SuperBlock measurement state.")
-    measure_file=str(measure_file_)
+    measure_restart_file = str(restart_input_dir)//str(measure_file_)
+    measure_file         = str(restart_output_dir)//str(measure_file_)
     !
     !    
     call parse_input_variable(LOGfile,"LOGFILE",INPUTunit,default=6,comment="LOG unit.")
@@ -344,6 +362,15 @@ contains
     endif
     !
   end subroutine read_input
+
+
+  function restart_timestamp() result(timestamp)
+    character(len=:),allocatable :: timestamp
+    character(len=8)             :: date
+    character(len=10)            :: time
+    call date_and_time(date=date,time=time)
+    timestamp = date(7:8)//date(5:6)//date(3:4)//"_"//time(1:6)
+  end function restart_timestamp
 
 
 

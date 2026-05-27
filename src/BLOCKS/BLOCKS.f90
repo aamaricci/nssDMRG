@@ -3,7 +3,7 @@ MODULE BLOCKS
        str,assert_shape,zeye,eye,to_lower,free_unit,file_gzip,file_gunzip,&
        set_store_size,t_start,t_stop,wait,check_MPI,get_Master_MPI
   USE AUX_FUNCS
-  USE INPUT_VARS, only: block_file,umat_file,LOGfile
+  USE INPUT_VARS, only: block_file,block_restart_file,umat_file,umat_restart_file,LOGfile,restart_output_dir
   USE MATRIX_SPARSE
   USE TUPLE_BASIS
   USE LIST_OPERATORS
@@ -25,8 +25,6 @@ MODULE BLOCKS
    contains
      procedure,pass :: free        => free_block
      procedure,pass :: put_op      => put_op_block
-     procedure,pass :: put_omat    => put_omat_block
-     procedure,pass :: write_omat  => write_omat_block
      procedure,pass :: get_basis   => get_basis_block
      procedure,pass :: set_basis   => set_basis_block
      procedure,pass :: show        => show_block
@@ -40,7 +38,10 @@ MODULE BLOCKS
      procedure,pass :: save        => save_block
      procedure,pass :: read        => read_block
      procedure,pass :: load        => load_block
+     procedure,pass :: write_omat  => write_omat_block
+     procedure,pass :: save_omat   => save_omat_block
      procedure,pass :: load_umat   => load_umat_block
+     procedure,pass :: put_omat    => put_omat_block
   end type block
 
 
@@ -168,41 +169,6 @@ contains
     character(len=*),intent(in)    :: type
     call self%operators%put(str(key),op,type)
   end subroutine put_op_block
-
-
-  !+------------------------------------------------------------------+
-  !PURPOSE:  Load a sparse matrix in the block dictionary
-  !+------------------------------------------------------------------+
-  subroutine put_omat_block(self,key,op,type)
-    class(block)                   :: self
-    character(len=*),intent(in)    :: key
-    type(sparse_matrix),intent(in) :: op
-    character(len=*),intent(in)    :: type
-    call self%omatrices%put(str(key),op,type)
-  end subroutine put_omat_block
-
-
-
-  subroutine write_omat_block(self,key,op,type,suffix,append)
-    class(block)                   :: self
-    character(len=*),intent(in)    :: key
-    type(sparse_matrix),intent(in) :: op
-    character(len=*),intent(in)    :: type
-    character(len=*),intent(in)    :: suffix
-    logical,optional               :: append
-    integer :: unit
-    logical :: append_
-    append_=.true.;if(present(append))append_=append
-    unit = fopen(str(umat_file)//str(suffix),append=append_)
-    write(unit,*)str(key)
-    if(str(type)=="")then
-       write(unit,*)"none"
-    else
-       write(unit,*)str(type)
-    endif
-    call op%write(unit=unit)
-    close(unit)
-  end subroutine write_omat_block
 
 
 
@@ -498,11 +464,15 @@ contains
     type(sparse_matrix)            :: umat
     character(len=32)              :: OpName,key,type,tag
     character(len=32)              :: SiteType
+    character(len=:),allocatable   :: file
     logical                        :: fbool
     logical                        :: load_umat_
     load_umat_=.false.;if(present(load_umat))load_umat_=load_umat
     !
-    open(free_unit(Bunit),file=str(block_file)//str(suffix) )
+    file = str(block_file)//str(suffix)
+    inquire(file=str(file),exist=fbool)
+    if(.not.fbool)file = str(block_restart_file)//str(suffix)
+    open(free_unit(Bunit),file=str(file) )
     !
     !General info:
     ! read(Bunit,*)Tag
@@ -551,6 +521,7 @@ contains
     logical          :: bool,gzbool
     logical          :: load_umat_
     logical :: master=.true.
+    character(len=:),allocatable :: file
     load_umat_=.false.;if(present(load_umat))load_umat_=load_umat
     !
 #ifdef _MPI
@@ -558,9 +529,14 @@ contains
 #endif
     !
     !Check if block_file exists:
-    inquire(file=str(block_file)//str(suffix), exist=bool)
+    file = str(block_file)//str(suffix)
+    inquire(file=str(file), exist=bool)
+    if(.not.bool)then
+       file = str(block_restart_file)//str(suffix)
+       inquire(file=str(file), exist=bool)
+    endif
     if(.not.bool)return
-    if(master)write(LOGfile,*)"Loading from: "//str(block_file)//str(suffix)
+    if(master)write(LOGfile,*)"Loading from: "//str(file)
     !
     if(load_umat_.and.master)write(LOGfile,*)"Loading rotation matrices from: "//str(umat_file)//"*"
     !
@@ -569,12 +545,77 @@ contains
   end subroutine load_block
 
 
+
+
+
+
+  !+------------------------------------------------------------------+
+  !PURPOSE:  Put/Write/Load Omatrices in the block dictionary
+  !+------------------------------------------------------------------+
+  subroutine put_omat_block(self,key,op,type)
+    class(block)                   :: self
+    character(len=*),intent(in)    :: key
+    type(sparse_matrix),intent(in) :: op
+    character(len=*),intent(in)    :: type
+    call self%omatrices%put(str(key),op,type)
+  end subroutine put_omat_block
+
+
+
+
+
+
+
+  subroutine write_omat_block(self,key,op,type,suffix,append)
+    class(block)                   :: self
+    character(len=*),intent(in)    :: key
+    type(sparse_matrix),intent(in) :: op
+    character(len=*),intent(in)    :: type
+    character(len=*),intent(in)    :: suffix
+    logical,optional               :: append
+    integer :: unit
+    logical :: append_
+    append_=.true.;if(present(append))append_=append
+    call write_umat_split_script()
+    unit = fopen(str(umat_file)//str(suffix),append=append_)
+    write(unit,*)str(key)
+    if(str(type)=="")then
+       write(unit,*)"none"
+    else
+       write(unit,*)str(type)
+    endif
+    call op%write(unit=unit)
+    close(unit)
+  end subroutine write_omat_block
+
+
+
+  subroutine save_omat_block(self,key,op,type,suffix,append,gzip)
+    class(block)                   :: self
+    character(len=*),intent(in)    :: key
+    type(sparse_matrix),intent(in) :: op
+    character(len=*),intent(in)    :: type
+    character(len=*),intent(in)    :: suffix
+    logical,optional               :: gzip,append
+    integer                        :: unit
+    logical                        :: gzip_,append_
+    gzip_  =.false.;if(present(gzip))  gzip_ =gzip
+    append_=.true.;if(present(append))append_=append
+    call self%write_omat(key,op,type,str(suffix),append=append_)
+    if(gzip_)then
+       call file_gzip(str(umat_file)//str(suffix))
+    endif
+  end subroutine save_omat_block
+
+
+
   subroutine load_umat_block(self,suffix,length)
     class(block)                   :: self
     character(len=*)               :: suffix
     integer                        :: length
     call read_umat_files(self%omatrices,suffix,length)
   end subroutine load_umat_block
+
 
 
   subroutine read_umat_files(omatrices,suffix,length)
@@ -586,36 +627,53 @@ contains
     character(len=32)              :: key,type
     character(len=:),allocatable   :: file_suffix
     logical                        :: fbool
+    logical                        :: loaded
+    integer                        :: iostat
     !
-    !Backward-compatible monolithic rotation file.
-    inquire(file=str(umat_file)//str(suffix), exist=fbool)
-    if(fbool)then
-       open(free_unit(Uunit),file=str(umat_file)//str(suffix))
-       do il=2,length
-          read(Uunit,*)key
-          read(Uunit,*)type
-          call umat%read(unit=Uunit)
-          call omatrices%put(str(key),umat,str(type))
-       enddo
-       call umat%free()
-       close(Uunit)
-       return
-    endif
-    !
-    !Current checkpoint format: one rotation file per block length.
-    do il=2,length
-       file_suffix = umat_suffix_from(str(suffix),il)
-       if(str(file_suffix)=="")cycle
-       inquire(file=str(umat_file)//str(file_suffix), exist=fbool)
-       if(.not.fbool)cycle
-       open(free_unit(Uunit),file=str(umat_file)//str(file_suffix))
-       read(Uunit,*)key
-       read(Uunit,*)type
-       call umat%read(unit=Uunit)
-       call omatrices%put(str(key),umat,str(type))
-       call umat%free()
-       close(Uunit)
-    enddo
+    call read_umat_from_prefix(str(umat_file),loaded)
+    if(loaded)return
+    call read_umat_from_prefix(str(umat_restart_file),loaded)
+
+  contains
+
+    subroutine read_umat_from_prefix(prefix,loaded)
+      character(len=*),intent(in) :: prefix
+      logical,intent(out)         :: loaded
+      loaded=.false.
+      !
+      !Monolithic rotation file read first.
+      inquire(file=str(prefix)//str(suffix), exist=fbool)
+      if(fbool)then
+         open(free_unit(Uunit),file=str(prefix)//str(suffix))
+         do
+            read(Uunit,*,iostat=iostat)key
+            if(iostat/=0)exit
+            read(Uunit,*)type
+            call umat%read(unit=Uunit)
+            call omatrices%put(str(key),umat,str(type))
+         enddo
+         call umat%free()
+         close(Uunit)
+         loaded=.true.
+         return
+      endif
+      !
+      !Split rotation file read second, in case monolithic file is missing.
+      do il=2,length
+         file_suffix = umat_suffix_from(str(suffix),il)
+         if(str(file_suffix)=="")cycle
+         inquire(file=str(prefix)//str(file_suffix), exist=fbool)
+         if(.not.fbool)cycle
+         open(free_unit(Uunit),file=str(prefix)//str(file_suffix))
+         read(Uunit,*)key
+         read(Uunit,*)type
+         call umat%read(unit=Uunit)
+         call omatrices%put(str(key),umat,str(type))
+         call umat%free()
+         close(Uunit)
+         loaded=.true.
+      enddo
+    end subroutine read_umat_from_prefix
   end subroutine read_umat_files
 
 
@@ -633,6 +691,38 @@ contains
        file_suffix=""
     endif
   end function umat_suffix_from
+
+
+  subroutine write_umat_split_script()
+    integer :: unit
+    open(free_unit(unit),file=str(restart_output_dir)//"split_umat.sh")
+    write(unit,'(A)')"#!/usr/bin/env bash"
+    write(unit,'(A)')"set -euo pipefail"
+    write(unit,'(A)')"dir=""$(cd ""$(dirname ""$0"")"" && pwd)"""
+    write(unit,'(A)')"split_side() {"
+    write(unit,'(A)')"  side=""$1"""
+    write(unit,'(A)')"  input=""$dir/umat_${side}.restart"""
+    write(unit,'(A)')"  [[ -f ""$input"" ]] || return 0"
+    write(unit,'(A)')"  awk -v side=""$side"" -v dir=""$dir"" '"
+    write(unit,'(A)')"  function trim(s){gsub(/^[[:space:]]+|[[:space:]]+$/, """", s); return s}"
+    write(unit,'(A)')"  {"
+    write(unit,'(A)')"    key=trim($0); if(key=="""") next"
+    write(unit,'(A)')"    if((getline type)<=0) exit; type=trim(type)"
+    write(unit,'(A)')"    if((getline dims)<=0) exit; split(trim(dims), d, /[[:space:]]+/); nrow=d[1]"
+    write(unit,'(A)')"    out=dir ""/umat_L"" key ""_"" side "".restart"""
+    write(unit,'(A)')"    print key > out; print type >> out; print dims >> out"
+    write(unit,'(A)')"    for(i=1;i<=nrow;i++){"
+    write(unit,'(A)')"      if((getline line)<=0) exit; print line >> out"
+    write(unit,'(A)')"      split(trim(line), r, /[[:space:]]+/); n=r[1]"
+    write(unit,'(A)')"      for(j=1;j<=n;j++){ if((getline line)<=0) exit; print line >> out }"
+    write(unit,'(A)')"    }"
+    write(unit,'(A)')"  }' ""$input"""
+    write(unit,'(A)')"}"
+    write(unit,'(A)')"split_side left"
+    write(unit,'(A)')"split_side right"
+    close(unit)
+    call execute_command_line("chmod +x "//str(restart_output_dir)//"split_umat.sh")
+  end subroutine write_umat_split_script
 
 
 END MODULE BLOCKS

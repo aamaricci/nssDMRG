@@ -60,10 +60,7 @@ contains
 #endif
 #endif
     !
-    if(MpiMaster)then
-       if(size(left%omatrices)<=1)call left%load_umat(suffix_dmrg('left')//".restart",left%length)
-       if(size(right%omatrices)<=1)call right%load_umat(suffix_dmrg('right')//".restart",right%length)
-    endif
+    if(MpiMaster)call load_measure_umat_files()
     !
     if((.not.allocated(sb_states)).or.(.not.allocated(gs_vector)).or.size(sb_sector)==0)then
        call sb_load_measure_state(found_measure_state)
@@ -124,6 +121,27 @@ contains
        ! g2bMap = b2gMap
     endif
   end subroutine Init_Measure_dmrg
+
+
+  subroutine load_measure_umat_files()
+    character(len=:),allocatable :: default_suffix,current_suffix
+    !
+    if(size(left%omatrices)<=1)then
+       default_suffix = suffix_dmrg('left',type='i')//".restart"
+       current_suffix = suffix_dmrg('left')//".restart"
+       call left%load_umat(str(default_suffix),left%length)
+       if(size(left%omatrices)<=1.and.str(current_suffix)/=str(default_suffix))&
+            call left%load_umat(str(current_suffix),left%length)
+    endif
+    !
+    if(size(right%omatrices)<=1)then
+       default_suffix = suffix_dmrg('right',type='i')//".restart"
+       current_suffix = suffix_dmrg('right')//".restart"
+       call right%load_umat(str(default_suffix),right%length)
+       if(size(right%omatrices)<=1.and.str(current_suffix)/=str(default_suffix))&
+            call right%load_umat(str(current_suffix),right%length)
+    endif
+  end subroutine load_measure_umat_files
 
 
 

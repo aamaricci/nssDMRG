@@ -68,8 +68,28 @@ contains
     !
     left =init_left
     right=init_right
+    call load_default_restart_blocks()
     !
   end subroutine init_dmrg
+
+
+  subroutine load_default_restart_blocks()
+    logical :: left_file,right_file
+    character(len=:),allocatable :: left_suffix,right_suffix
+    !
+    left_suffix  = suffix_dmrg('left',type='i')//".restart"
+    right_suffix = suffix_dmrg('right',type='i')//".restart"
+    inquire(file=str(block_restart_file)//str(left_suffix),exist=left_file)
+    inquire(file=str(block_restart_file)//str(right_suffix),exist=right_file)
+    !
+    if(left_file.and.right_file)then
+       call left%load(str(left_suffix))
+       call right%load(str(right_suffix))
+       if(left%length/=right%length)stop "load_default_restart_blocks error: L.length != R.length"
+    elseif(left_file.neqv.right_file)then
+       if(MpiMaster)write(LOGfile,*)"init_DMRG WARNING: incomplete default block restart pair found; using fresh initial blocks."
+    endif
+  end subroutine load_default_restart_blocks
 
 
 
@@ -308,11 +328,11 @@ contains
     if(save_block)then
        if(MpiMaster)then
           if(save_all_blocks)then
-             call left%save(suffix_dmrg('left',left%length,type)//".restart",gzip=.true.,include_omatrices=.false.)
-             call right%save(suffix_dmrg('right',right%length,type)//".restart",gzip=.true.,include_omatrices=.false.)
+             call left%save(suffix_dmrg('left',left%length,type)//".restart",gzip=.false.,include_omatrices=.false.)
+             call right%save(suffix_dmrg('right',right%length,type)//".restart",gzip=.false.,include_omatrices=.false.)
           else
-             call left%save(suffix_dmrg('left',type=type)//".restart",gzip=.true.,include_omatrices=.false.)
-             call right%save(suffix_dmrg('right',type=type)//".restart",gzip=.true.,include_omatrices=.false.)
+             call left%save(suffix_dmrg('left',type=type)//".restart",gzip=.false.,include_omatrices=.false.)
+             call right%save(suffix_dmrg('right',type=type)//".restart",gzip=.false.,include_omatrices=.false.)
           endif
        endif
     endif

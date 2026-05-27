@@ -646,55 +646,95 @@ contains
 
 
   subroutine sb_save_measure_state()
-    integer :: unit,Nstates,Nenergy,Nrow,Ncol,Nqn
-    character(len=:),allocatable :: file
+   integer                                :: unit,Nstates,Nenergy,Nrow,Ncol,Nqn
+   character(len=:),allocatable           :: file
+#ifdef _CMPLX
+    complex(8),dimension(:,:),allocatable :: gs_full
+#else
+    real(8),dimension(:,:),allocatable    :: gs_full
+#endif
     !
     if(.not.allocated(sb_states))return
     if(.not.allocated(gs_vector))return
     if(.not.allocated(gs_energy))return
     !
-    file = measure_state_file()
-    open(free_unit(unit),file=str(file))
-    write(unit,*)"NSSDMRG_MEASURE_STATE_V1"
-    write(unit,*)MpiRank,MpiSize
-    write(unit,*)left%length,right%length,current_L
-    Nqn=size(current_target_qn)
-    write(unit,*)Nqn
-    write(unit,*)current_target_qn
+    !Build parallel dims (which have been deleted by sb_delete_Hv)
+    call sb_build_dims(quiet=.true.)
     Nstates=size(sb_states)
-    write(unit,*)Nstates
-    write(unit,*)sb_states
-    call sb_sector%write(unit=unit)
     Nenergy=size(gs_energy)
-    write(unit,*)Nenergy
-    write(unit,*)gs_energy
-    Nrow=size(gs_vector,1)
     Ncol=size(gs_vector,2)
-    write(unit,*)Nrow,Ncol
-    write(unit,*)gs_vector
-    close(unit)
+    if(MpiStatus)then
+       if(MpiMaster)then
+          allocate(gs_full(Nstates,Ncol))
+       else
+          allocate(gs_full(1,Ncol))
+       endif
+       gs_full=zero
+       call gather_vector_MPI(MpiComm,gs_vector,gs_full)
+    else
+       allocate(gs_full(Nstates,Ncol))
+       gs_full = gs_vector
+    endif
+    !
+    if(MpiMaster)then
+       file = measure_state_file()
+       open(free_unit(unit),file=str(file))
+       write(unit,*)"#NSSDMRG_MEASURE_STATE"
+       write(unit,*)MpiSize
+       write(unit,*)left%length,right%length,current_L
+       Nqn=size(current_target_qn)
+       write(unit,*)Nqn
+       write(unit,*)current_target_qn
+       write(unit,*)Nstates
+       write(unit,*)sb_states
+       call sb_sector%write(unit=unit)
+       write(unit,*)Nenergy
+       write(unit,*)gs_energy
+       Nrow=size(gs_full,1)
+       Ncol=size(gs_full,2)
+       write(unit,*)Nrow,Ncol
+       close(unit)
+       !
+       file = measure_vector_file()
+       open(free_unit(unit),file=str(file))
+       write(unit,*)gs_full
+       close(unit)
+    endif
+    call sb_delete_dims()
+    deallocate(gs_full)
   end subroutine sb_save_measure_state
 
 
   subroutine sb_load_measure_state(found)
-    logical,optional :: found
-    logical :: file_exists
-    integer :: unit,file_rank,file_size
-    integer :: left_length,right_length,stored_current_L
-    integer :: Nstates,Nenergy,Nrow,Ncol,Nqn
-    character(len=64) :: magic
-    character(len=:),allocatable :: file
+    logical,optional                      :: found
+    logical                               :: file_exists
+    integer                               :: unit,file_size
+    integer                               :: left_length,right_length,stored_current_L
+    integer                               :: Nstates,Nenergy,Nrow,Ncol,Nqn
+    character(len=64)                     :: magic
+    character(len=:),allocatable          :: file
+    character(len=:),allocatable          :: vector_file
+#ifdef _CMPLX
+    complex(8),dimension(:,:),allocatable :: gs_full
+#else
+    real(8),dimension(:,:),allocatable    :: gs_full
+#endif
     !
     file = measure_state_file()
+    vector_file = measure_vector_file()
     inquire(file=str(file),exist=file_exists)
+    if(.not.file_exists)then
+       file = measure_restart_state_file()
+       vector_file = measure_restart_vector_file()
+       inquire(file=str(file),exist=file_exists)
+    endif
     if(present(found))found=file_exists
     if(.not.file_exists)return
     !
     open(free_unit(unit),file=str(file))
     read(unit,*)magic
-    if(str(magic)/="NSSDMRG_MEASURE_STATE_V1")stop "sb_load_measure_state error: unsupported file format"
-    read(unit,*)file_rank,file_size
-    if(file_rank/=MpiRank)stop "sb_load_measure_state error: MPI rank mismatch"
+    if(str(magic)/="#NSSDMRG_MEASURE_STATE")stop "sb_load_measure_state error: unsupported file format"
+    read(unit,*)file_size
     if(file_size/=MpiSize)stop "sb_load_measure_state error: MPI size mismatch"
     read(unit,*)left_length,right_length,stored_current_L
     if(left_length/=left%length)stop "sb_load_measure_state error: left block length mismatch"
@@ -714,17 +754,55 @@ contains
     allocate(gs_energy(Nenergy))
     read(unit,*)gs_energy
     read(unit,*)Nrow,Ncol
-    if(allocated(gs_vector))deallocate(gs_vector)
-    allocate(gs_vector(Nrow,Ncol))
-    read(unit,*)gs_vector
     close(unit)
+    !
+    call sb_build_dims(quiet=.true.)
+    if(allocated(gs_vector))deallocate(gs_vector)
+    allocate(gs_vector(sb_vecDim_Hv(),Ncol))
+    if(MpiStatus)then
+       if(MpiMaster)then
+          allocate(gs_full(Nrow,Ncol))
+          open(free_unit(unit),file=str(vector_file))
+          read(unit,*)gs_full
+          close(unit)
+       else
+          allocate(gs_full(1,Ncol));gs_full=zero
+       endif
+       call scatter_vector_MPI(MpiComm,gs_full,gs_vector)
+    else
+       allocate(gs_full(Nrow,Ncol))
+       open(free_unit(unit),file=str(vector_file))
+       read(unit,*)gs_full
+       close(unit)
+       gs_vector = gs_full
+    endif
+    call sb_delete_dims()
+    deallocate(gs_full)
   end subroutine sb_load_measure_state
 
 
   function measure_state_file() result(file)
     character(len=:),allocatable :: file
-    file = str(measure_file)//".rank"//str(MpiRank)//".restart"
+    file = str(measure_file)//".restart"
   end function measure_state_file
+
+
+  function measure_vector_file() result(file)
+    character(len=:),allocatable :: file
+    file = str(measure_file)//".gs.restart"
+  end function measure_vector_file
+
+
+  function measure_restart_state_file() result(file)
+    character(len=:),allocatable :: file
+    file = str(measure_restart_file)//".restart"
+  end function measure_restart_state_file
+
+
+  function measure_restart_vector_file() result(file)
+    character(len=:),allocatable :: file
+    file = str(measure_restart_file)//".gs.restart"
+  end function measure_restart_vector_file
 
 
 

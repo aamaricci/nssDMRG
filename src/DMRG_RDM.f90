@@ -221,8 +221,8 @@ contains
           trRho_left             = rho_left%sparse(m_left,m_s)
           !>Store all the rotation/truncation matrices:
           if(block_umat_cache)call left%put_omat(str(left%length),trRho_left,'')
-          if(save_umat)call left%write_omat(str(left%length),trRho_left,'',&
-               suffix_dmrg('left',left%length)//".restart",append=.false.)
+          if(save_umat)call left%save_omat(str(left%length),trRho_left,'',&
+               suffix_dmrg('left')//".restart",append=(left%length/=2),gzip=.false.)
        endif
 #ifdef _MPI
        if(MpiStatus)call Bcast_MPI(MpiComm,m_s)
@@ -291,8 +291,8 @@ contains
           trRho_right            = rho_right%sparse(m_right,m_e)
           !>Store all the rotation/truncation matrices:
           if(block_umat_cache)call right%put_omat(str(right%length),trRho_right,'')
-          if(save_umat)call right%write_omat(str(right%length),trRho_right,'',&
-               suffix_dmrg('right',right%length)//".restart",append=.false.)
+          if(save_umat)call right%save_omat(str(right%length),trRho_right,'',&
+               suffix_dmrg('right')//".restart",append=(right%length/=2),gzip=.false.)
        endif
 #ifdef _MPI
        if(MpiStatus)call Bcast_MPI(MpiComm,m_e)
@@ -399,6 +399,5 @@ contains
 
 
 END MODULE DMRG_RDM
-
 
 
