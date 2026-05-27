@@ -18,6 +18,8 @@ MODULE DMRG_SUPERBLOCK
   public :: sb_delete_Hv
   public :: sb_save_measure_state
   public :: sb_load_measure_state
+  public :: sb_save_measure_blocks
+
 
   integer :: ierr
   integer :: ispin
@@ -781,6 +783,7 @@ contains
   end subroutine sb_load_measure_state
 
 
+
   function measure_state_file() result(file)
     character(len=:),allocatable :: file
     file = str(measure_file)//".restart"
@@ -803,6 +806,21 @@ contains
     character(len=:),allocatable :: file
     file = str(measure_restart_file)//".gs.restart"
   end function measure_restart_vector_file
+
+
+  subroutine sb_save_measure_blocks()
+    call left%save(suffix_dmrg('left',type='i')//".restart",gzip=.false.,&
+         include_omatrices=.false.,file_prefix=str(measure_block_file))
+    call right%save(suffix_dmrg('right',type='i')//".restart",gzip=.false.,&
+         include_omatrices=.false.,file_prefix=str(measure_block_file))
+  end subroutine sb_save_measure_blocks
+
+
+
+
+
+
+
 
 
 

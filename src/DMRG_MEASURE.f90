@@ -16,6 +16,7 @@ module DMRG_MEASURE
   public :: Build_Op_DMRG
   public :: Advance_Op_DMRG
   public :: Advance_Corr_DMRG
+  public :: Measure_Corr_Available
   public :: Average_Op_DMRG
   public :: Write_DMRG
 
@@ -38,6 +39,7 @@ module DMRG_MEASURE
   type(sparse_matrix),allocatable,dimension(:) :: Olist
   type(tstates),dimension(:),allocatable       :: Li,Ri
   logical                                      :: measure_status=.false.
+  logical                                      :: measure_positions_filtered=.false.
 
   character(:),allocatable                     :: string
 
@@ -53,6 +55,7 @@ contains
     integer,dimension(2)             :: omat_dims
     integer                          :: ilat,i,f,m
     logical                          :: found_measure_state
+    logical                          :: need_measure_state
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: init measure"
 #ifdef _MPI
@@ -60,9 +63,11 @@ contains
 #endif
 #endif
     !
+    need_measure_state = (.not.allocated(sb_states)).or.(.not.allocated(gs_vector)).or.size(sb_sector)==0
+    if(need_measure_state)call load_measure_blocks_if_available()
     if(MpiMaster)call load_measure_umat_files()
     !
-    if((.not.allocated(sb_states)).or.(.not.allocated(gs_vector)).or.size(sb_sector)==0)then
+    if(need_measure_state)then
        call sb_load_measure_state(found_measure_state)
        if(.not.found_measure_state)then
           if(MpiMaster)write(LOGfile,*)"Init_Measure_DMRG: no saved SuperBlock measurement state found."
@@ -121,6 +126,31 @@ contains
        ! g2bMap = b2gMap
     endif
   end subroutine Init_Measure_dmrg
+
+
+  subroutine load_measure_blocks_if_available()
+    logical :: left_file,right_file
+    character(len=:),allocatable :: left_suffix,right_suffix,prefix
+    !
+    left_suffix  = suffix_dmrg('left',type='i')//".restart"
+    right_suffix = suffix_dmrg('right',type='i')//".restart"
+    !
+    prefix = str(measure_block_file)
+    inquire(file=str(prefix)//str(left_suffix),exist=left_file)
+    inquire(file=str(prefix)//str(right_suffix),exist=right_file)
+    if(.not.(left_file.and.right_file))then
+       prefix = str(measure_block_restart_file)
+       inquire(file=str(prefix)//str(left_suffix),exist=left_file)
+       inquire(file=str(prefix)//str(right_suffix),exist=right_file)
+    endif
+    !
+    if(left_file.and.right_file)then
+       call left%load(str(left_suffix),file_prefix=str(prefix))
+       call right%load(str(right_suffix),file_prefix=str(prefix))
+    elseif(left_file.neqv.right_file)then
+       if(MpiMaster)write(LOGfile,*)"Init_Measure_DMRG WARNING: incomplete measurement block restart pair found."
+    endif
+  end subroutine load_measure_blocks_if_available
 
 
   subroutine load_measure_umat_files()
@@ -202,6 +232,15 @@ contains
     if(MpiMaster)write(LOGfile,*)"DEBUG: measure Op",pos
 #endif
     if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)then
+       avOp = zero
+       return
+    endif
+    if((.not.measure_positions_filtered).and.(.not.Measure_Pos_Available_Global(pos)))then
+       if(MpiMaster)write(LOGfile,*)"Measure_Op_DMRG: unavailable position",pos
+       avOp = zero
+       return
+    endif
     Oi   = Build_Op_dmrg(Op,pos)
     Oi   = Advance_Op_dmrg(Oi,pos)
     avOp = Average_Op_dmrg(Oi,pos)
@@ -237,19 +276,32 @@ contains
     !
     msg="";if(present(file))msg=file
     !
-    L = left%length ; R = right%length
-    Np = L+R;if(present(pos))Np= size(pos)
-    !
-    allocate(vals(Np))
-    allocate(pos_(Np))
-    pos_=arange(1,Np);if(present(pos))pos_=pos
-    !
     call Init_measure_dmrg(msg)
     if(.not.measure_status)then
        call Error_measure_DMRG
        return
     endif
     !
+    L = left%length ; R = right%length
+    Np = L+R
+    if(present(pos))then
+       call filter_measure_positions(pos,pos_)
+    else
+       call filter_measure_positions(arange(1,Np),pos_)
+    endif
+    Np = size(pos_)
+    allocate(vals(Np))
+    if(Np==0)then
+       if(MpiMaster)write(LOGfile,*)"Measure_DMRG: no requested positions are available in the loaded restart history."
+       call End_measure_dmrg()
+       if(present(avOp))then
+          if(allocated(avOp))deallocate(avOp)
+          allocate(avOp(0))
+       endif
+       return
+    endif
+    !
+    measure_positions_filtered=.true.
     do i=1,Np
        ipos    = pos_(i)
        vals(i) = Measure_Op_DMRG(Op,ipos)
@@ -258,6 +310,7 @@ contains
 #endif
        if(MpiMaster)call eta(i,Np)
     enddo
+    measure_positions_filtered=.false.
     if(MpiMaster.AND.present(file))call Write_DMRG(trim(file),vals,pos_)
     call End_measure_dmrg()
     !
@@ -290,22 +343,34 @@ contains
     !
     msg="";if(present(file))msg=file
     !
-    M  = size(Op)
-    L  = left%length
-    R  = right%length
-    Np = L+R;if(present(pos))Np= size(pos)
-    !
-    allocate(pos_(Np))
-    pos_=arange(1,Np);if(present(pos))pos_=pos
-    !
-    allocate(vals(M,Np))
-    !
     call Init_measure_dmrg(msg)
     if(.not.measure_status)then
        call Error_measure_DMRG
        return
     endif
     !
+    M  = size(Op)
+    L  = left%length
+    R  = right%length
+    Np = L+R
+    if(present(pos))then
+       call filter_measure_positions(pos,pos_)
+    else
+       call filter_measure_positions(arange(1,Np),pos_)
+    endif
+    Np = size(pos_)
+    allocate(vals(M,Np))
+    if(Np==0)then
+       if(MpiMaster)write(LOGfile,*)"Measure_DMRG: no requested positions are available in the loaded restart history."
+       call End_measure_dmrg()
+       if(present(avOp))then
+          if(allocated(avOp))deallocate(avOp)
+          allocate(avOp(M,0))
+       endif
+       return
+    endif
+    !
+    measure_positions_filtered=.true.
     do i=1,Np
        ipos = pos_(i)
        do j=1,M
@@ -316,6 +381,7 @@ contains
 #endif
        if(MpiMaster)call eta(i,Np)
     enddo
+    measure_positions_filtered=.false.
     if(MpiMaster.AND.present(file))call Write_DMRG(trim(file),vals,pos_)
     call End_measure_dmrg()
     !
@@ -324,6 +390,165 @@ contains
        allocate(avOp, source=vals)
     endif
   end subroutine Measure_DMRG_vector
+
+
+  subroutine filter_measure_positions(pos_in,pos_out)
+    integer,dimension(:),intent(in)      :: pos_in
+    integer,dimension(:),allocatable     :: pos_out
+    integer,dimension(:),allocatable     :: mask
+    integer                              :: i,nvalid
+    logical                              :: available
+    !
+    allocate(mask(size(pos_in)))
+    mask=0
+    if(MpiMaster)then
+       do i=1,size(pos_in)
+          available = Measure_Pos_Available(pos_in(i))
+          if(available)mask(i)=1
+       enddo
+    endif
+#ifdef _MPI
+    if(MpiStatus)call Bcast_MPI(MpiComm,mask)
+#endif
+    nvalid=0
+    do i=1,size(pos_in)
+       if(mask(i)==1)nvalid=nvalid+1
+    enddo
+    allocate(pos_out(nvalid))
+    nvalid=0
+    do i=1,size(pos_in)
+       if(mask(i)==1)then
+          nvalid=nvalid+1
+          pos_out(nvalid)=pos_in(i)
+       elseif(MpiMaster)then
+          write(LOGfile,*)"Measure_DMRG: skipping unavailable position",pos_in(i)
+       endif
+    enddo
+    deallocate(mask)
+  end subroutine filter_measure_positions
+
+
+  function Measure_Pos_Available(pos) result(available)
+    integer,intent(in) :: pos
+    logical            :: available
+    integer            :: L,R,N,i
+    character(len=1)   :: label
+    !
+    L = left%length
+    R = right%length
+    N = L+R
+    available = pos>=1.AND.pos<=N
+    if(available)then
+       label='l'; if(pos>L)label='r'
+       i=b2gMap(pos); if(pos>L)i=b2gMap(N+1-pos)
+       if(MpiMaster)then
+          select case(label)
+          case("l")
+             available = side_measure_pos_available(left%omatrices,i,L)
+          case("r")
+             available = side_measure_pos_available(right%omatrices,i,R)
+          end select
+       endif
+    endif
+  end function Measure_Pos_Available
+
+
+  function Measure_Pos_Available_Global(pos) result(available)
+    integer,intent(in) :: pos
+    logical            :: available
+    integer            :: flag
+    !
+    flag=0
+    if(MpiMaster)then
+       available = Measure_Pos_Available(pos)
+       if(available)flag=1
+    endif
+#ifdef _MPI
+    if(MpiStatus)call Bcast_MPI(MpiComm,flag)
+#endif
+    available = flag==1
+  end function Measure_Pos_Available_Global
+
+
+  function Measure_Corr_Available(pos,nstep) result(available)
+    integer,intent(in)  :: pos
+    integer,optional    :: nstep
+    logical             :: available
+    integer             :: flag
+    !
+    flag=0
+    if(MpiMaster)then
+       available = Measure_Corr_Available_Local(pos,nstep)
+       if(available)flag=1
+    endif
+#ifdef _MPI
+    if(MpiStatus)call Bcast_MPI(MpiComm,flag)
+#endif
+    available = flag==1
+  end function Measure_Corr_Available
+
+
+  function Measure_Corr_Available_Local(pos,nstep) result(available)
+    integer,intent(in) :: pos
+    integer,optional   :: nstep
+    logical            :: available
+    integer            :: L,R,N,i,istart,iend,it
+    character(len=1)   :: label
+    !
+    L = left%length
+    R = right%length
+    N = L+R
+    available = pos>=1.AND.pos<=N
+    if(.not.available)return
+    !
+    label='l'; if(pos>L)label='r'
+    i=b2gMap(pos); if(pos>L)i=b2gMap(N+1-pos)
+    istart=i
+    select case(label)
+    case("l")
+       iend=L-1;if(present(nstep))iend=istart+nstep
+       if(iend>L-1)then
+          available=.false.
+          return
+       endif
+       do it=istart+1,iend
+          if(.not.left%omatrices%has_key(str(it)))then
+             available=.false.
+             return
+          endif
+       enddo
+    case("r")
+       iend=R-1;if(present(nstep))iend=istart+nstep
+       if(iend>R-1)then
+          available=.false.
+          return
+       endif
+       do it=istart+1,iend
+          if(.not.right%omatrices%has_key(str(it)))then
+             available=.false.
+             return
+          endif
+       enddo
+    end select
+  end function Measure_Corr_Available_Local
+
+
+  function side_measure_pos_available(omatrices,i,L) result(available)
+    type(operators_list) :: omatrices
+    integer,intent(in)   :: i,L
+    logical              :: available
+    integer              :: it
+    !
+    available=.true.
+    if(i>1)available = omatrices%has_key(str(i-1)).or.omatrices%has_key(str(i))
+    if(.not.available)return
+    do it=i,L-1
+       if(.not.omatrices%has_key(str(it)))then
+          available=.false.
+          return
+       endif
+    enddo
+  end function side_measure_pos_available
 
 
 
@@ -342,7 +567,7 @@ contains
     character(len=1)               :: label
     type(sparse_matrix)            :: U
     integer                        :: L,R,N
-    integer                        :: i,dB(2),d
+    integer                        :: i,dB(2),d,dOp(2)
     logical                        :: set_basis_
     !
 #ifdef _DEBUG
@@ -367,14 +592,31 @@ contains
     !recall that M: OBC: 1+2+...Ldmrg-2+Ldmrg-1+Ldmrg
     !               PBC: Ldmrg+Ldmrg-2..+1+..+Ldmrg-1
     i=b2gMap(pos)    ; if(pos>L)i=b2gMap(N+1-pos)
+    if((.not.measure_positions_filtered).and.(.not.Measure_Pos_Available_Global(pos)))then
+       if(MpiMaster)write(LOGfile,*)"Build_Op_DMRG: skipping unavailable position",pos
+       select case(label)
+       case("l")
+          call Oi%init(left%Dim,left%Dim)
+       case("r")
+          call Oi%init(right%Dim,right%Dim)
+       end select
+       return
+    endif
     !
     !Build Operator on the chain at position pos:   
     if(i==1)then
        Oi = Op
     else
+       dOp = shape(Op)
        select case(label)
        case('l')
-          if(MpiMaster)dB = shape(left%omatrices%op(index=i-1));D=dB(2)
+          if(MpiMaster)then
+             if(left%omatrices%has_key(str(i-1)))then
+                dB = shape(left%omatrices%op(key=str(i-1)));D=dB(2)
+             else
+                dB = shape(left%omatrices%op(key=str(i)));D=dB(1)/dOp(1)
+             endif
+          endif
 #ifdef _MPI
           if(MpiStatus)call Bcast_MPI(MpiComm,D)
 #endif
@@ -388,7 +630,13 @@ contains
              Oi = Id(D).x.Op    !o--x
           endif
        case('r')
-          if(MpiMaster)dB = shape(right%omatrices%op(index=i-1));D=dB(2)
+          if(MpiMaster)then
+             if(right%omatrices%has_key(str(i-1)))then
+                dB = shape(right%omatrices%op(key=str(i-1)));D=dB(2)
+             else
+                dB = shape(right%omatrices%op(key=str(i)));D=dB(1)/dOp(1)
+             endif
+          endif
 #ifdef _MPI
           if(MpiStatus)call Bcast_MPI(MpiComm,D)
 #endif
@@ -415,9 +663,9 @@ contains
     subroutine Urotate()
       select case(label)
       case("l")
-         if(MpiMaster)U = left%omatrices%op(index=i)
+         if(MpiMaster)U = left%omatrices%op(key=str(i))
       case("r")
-         if(MpiMaster)U = right%omatrices%op(index=i)
+         if(MpiMaster)U = right%omatrices%op(key=str(i))
       end select
 #ifdef _MPI
       if(MpiStatus)then
@@ -485,7 +733,7 @@ contains
     select case(label)
     case ("l") 
        do it=istart,iend
-          if(MpiMaster) U  = left%omatrices%op(index=it)
+          if(MpiMaster) U  = left%omatrices%op(key=str(it))
           call Urotate()
           if(PBCdmrg)then
              if(mod(it,2)==0)then
@@ -499,7 +747,7 @@ contains
        enddo
     case ("r") 
        do it=istart,iend
-          if(MpiMaster) U  = right%omatrices%op(index=it)
+          if(MpiMaster) U  = right%omatrices%op(key=str(it))
           call Urotate()
           if(PBCdmrg)then
              if(mod(it,2)==0)then
@@ -566,6 +814,16 @@ contains
     !
     !Get label of the block holding the site at position pos:
     label='l'; if(pos>L)label='r'
+    if(.not.Measure_Corr_Available(pos,nstep))then
+       if(MpiMaster)write(LOGfile,*)"Advance_Corr_DMRG: skipping unavailable correlator position",pos
+       select case(label)
+       case("l")
+          call Oi%init(left%Dim,left%Dim)
+       case("r")
+          call Oi%init(right%Dim,right%Dim)
+       end select
+       return
+    endif
     !
     !Get index in the block from the position pos in the chain:
     i=b2gMap(pos)    ; if(pos>L)i=b2gMap(N+1-pos)
@@ -585,7 +843,7 @@ contains
     select case(label)
     case ("l")
        do it=istart+1,iend
-          if(MpiMaster)U  = left%omatrices%op(index=it)
+          if(MpiMaster)U  = left%omatrices%op(key=str(it))
           call Urotate
           if(PBCdmrg)then
              if(mod(it,2)==0)then
@@ -599,7 +857,7 @@ contains
        enddo
     case ("r")
        do it=istart+1,iend
-          if(MpiMaster)U  = right%omatrices%op(index=it)          
+          if(MpiMaster)U  = right%omatrices%op(key=str(it))
           call Urotate()
           if(PBCdmrg)then
              if(mod(it,2)==0)then

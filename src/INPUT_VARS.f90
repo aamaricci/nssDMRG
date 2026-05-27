@@ -128,6 +128,10 @@ MODULE INPUT_VARS
   !Name prefix of the stored SuperBlock measurement state.
   character(len=:),allocatable :: measure_restart_file
   !Name prefix of the input SuperBlock measurement state.
+  character(len=:),allocatable :: measure_block_file
+  !Name prefix of the stored measurement block snapshots.
+  character(len=:),allocatable :: measure_block_restart_file
+  !Name prefix of the input measurement block snapshots.
   character(len=:),allocatable :: restart_input_dir
   !Directory used to read explicit restart files.
   character(len=:),allocatable :: restart_output_dir
@@ -343,6 +347,8 @@ contains
          comment="Name prefix of the stored SuperBlock measurement state.")
     measure_restart_file = str(restart_input_dir)//str(measure_file_)
     measure_file         = str(restart_output_dir)//str(measure_file_)
+    measure_block_restart_file = str(restart_input_dir)//"measure.block"
+    measure_block_file         = str(restart_output_dir)//"measure.block"
     !
     !    
     call parse_input_variable(LOGfile,"LOGFILE",INPUTunit,default=6,comment="LOG unit.")

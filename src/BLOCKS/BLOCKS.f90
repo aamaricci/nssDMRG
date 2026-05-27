@@ -378,17 +378,20 @@ contains
 
 
 
-  subroutine write_block(self,suffix,include_omatrices)
+  subroutine write_block(self,suffix,include_omatrices,file_prefix)
     class(block)              :: self
     character(len=*)          :: suffix
     logical,optional          :: include_omatrices
+    character(len=*),optional :: file_prefix
     integer                   :: Bunit,Uunit
     logical                   :: include_omatrices_
+    character(len=:),allocatable :: prefix
     type(operators_list)      :: omatrices
     type(sparse_matrix)       :: eye_op
     include_omatrices_=.false.;if(present(include_omatrices))include_omatrices_=include_omatrices
+    prefix=str(block_file);if(present(file_prefix))prefix=str(file_prefix)
     !
-    open(free_unit(Bunit),file=str(block_file)//str(suffix) )
+    open(free_unit(Bunit),file=str(prefix)//str(suffix) )
     !
     !General info:
     ! write(Bunit,*)self%BlockTag
@@ -430,17 +433,20 @@ contains
 
 
 
-  subroutine save_block(self,suffix,gzip,include_omatrices)
+  subroutine save_block(self,suffix,gzip,include_omatrices,file_prefix)
     class(block)     :: self
     character(len=*) :: suffix
     logical,optional :: include_omatrices
+    character(len=*),optional :: file_prefix
     integer          :: unit_
     logical          :: gzip,fbool
     logical          :: include_omatrices_
+    character(len=:),allocatable :: prefix
     include_omatrices_=.false.;if(present(include_omatrices))include_omatrices_=include_omatrices
-    call self%write(str(suffix),include_omatrices=include_omatrices_)
+    prefix=str(block_file);if(present(file_prefix))prefix=str(file_prefix)
+    call self%write(str(suffix),include_omatrices=include_omatrices_,file_prefix=str(prefix))
     if(gzip)then
-       call file_gzip(str(block_file)//str(suffix))
+       call file_gzip(str(prefix)//str(suffix))
     endif
   end subroutine save_block
 
@@ -450,10 +456,11 @@ contains
 
 
 
-  subroutine read_block(self,suffix,load_umat)
+  subroutine read_block(self,suffix,load_umat,file_prefix)
     class(block)                   :: self
     character(len=*)               :: suffix
     logical,optional               :: load_umat
+    character(len=*),optional      :: file_prefix
     integer                        :: Bunit,Uunit
     integer                        :: SectorSize
     integer                        :: length,il
@@ -465,13 +472,17 @@ contains
     character(len=32)              :: OpName,key,type,tag
     character(len=32)              :: SiteType
     character(len=:),allocatable   :: file
+    character(len=:),allocatable   :: prefix
     logical                        :: fbool
     logical                        :: load_umat_
     load_umat_=.false.;if(present(load_umat))load_umat_=load_umat
     !
-    file = str(block_file)//str(suffix)
-    inquire(file=str(file),exist=fbool)
-    if(.not.fbool)file = str(block_restart_file)//str(suffix)
+    prefix=str(block_file);if(present(file_prefix))prefix=str(file_prefix)
+    file = str(prefix)//str(suffix)
+    if(.not.present(file_prefix))then
+       inquire(file=str(file),exist=fbool)
+       if(.not.fbool)file = str(block_restart_file)//str(suffix)
+    endif
     open(free_unit(Bunit),file=str(file) )
     !
     !General info:
@@ -514,14 +525,16 @@ contains
 
 
 
-  subroutine load_block(self,suffix,load_umat)
+  subroutine load_block(self,suffix,load_umat,file_prefix)
     class(block)     :: self
     character(len=*) :: suffix
     logical,optional :: load_umat
+    character(len=*),optional :: file_prefix
     logical          :: bool,gzbool
     logical          :: load_umat_
     logical :: master=.true.
     character(len=:),allocatable :: file
+    character(len=:),allocatable :: prefix
     load_umat_=.false.;if(present(load_umat))load_umat_=load_umat
     !
 #ifdef _MPI
@@ -529,9 +542,11 @@ contains
 #endif
     !
     !Check if block_file exists:
-    file = str(block_file)//str(suffix)
+    prefix=str(block_file);if(present(file_prefix))prefix=str(file_prefix)
+    file = str(prefix)//str(suffix)
     inquire(file=str(file), exist=bool)
-    if(.not.bool)then
+    if(.not.bool.and.(.not.present(file_prefix)))then
+       prefix = str(block_restart_file)
        file = str(block_restart_file)//str(suffix)
        inquire(file=str(file), exist=bool)
     endif
@@ -540,7 +555,7 @@ contains
     !
     if(load_umat_.and.master)write(LOGfile,*)"Loading rotation matrices from: "//str(umat_file)//"*"
     !
-    call self%read(str(suffix),load_umat=load_umat_)
+    call self%read(str(suffix),load_umat=load_umat_,file_prefix=str(prefix))
     !
   end subroutine load_block
 

@@ -392,7 +392,11 @@ contains
     !#################################
     !In DMRG_SUPERBLOCK:
     call sb_diag()
-    if(save_measure_state)call sb_save_measure_state()
+    if(save_measure_state)then
+      call sb_save_measure_state()
+      if(MpiMaster)call sb_save_measure_blocks()
+    endif
+    !
     !
     if(MpiMaster)then
        write(LOGfile,*)"- - - - - - - - - - - - - - - - - - - - -"
@@ -452,6 +456,7 @@ contains
     !...
     return
   end subroutine step_dmrg
+
 
 
 
