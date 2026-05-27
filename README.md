@@ -25,6 +25,7 @@ The structure of this code is largely inspired by the excellent simple-DMRG proj
   - [Milestone 9](#milestone9) Implement Periodic Boundary Conditions.
   - [Milestone 10](#milestone10) Fix Symmetry Fragmentation using MPI sub-communicators.
   - [Milestone 11](#milestone11) Lazy direct MVP operator filtering.
+  - [Milestone 12](#milestone12) Memory management and further optimizations. Fix restart and checkpointing.
 - [Results](#results)
     
 ## <a name="dependencies"></a> Dependencies
@@ -212,6 +213,39 @@ only at the moment when that contribution is applied to the vector. Thus the mem
 <sup>For fermionic models the left boundary hopping operators are prepared directly in the contracted form $c^\dagger_{L,\alpha}P_L$, where $P_L$ is the fermionic sign/parity operator and $\alpha$ labels spin-orbital flavor and link direction. This avoids repeatedly forming the sparse product $c^\dagger P$ inside each MVP call. The lazy implementation also reuses cached inverse sector maps so that the filtering operation does not rebuild the same global-to-sector lookup arrays at every application.</sup>
 
 <sup>The practical goal of `DIRECT_H_LAZY = T` is therefore to trade repeated sparse filtering work for a substantially smaller persistent memory footprint. This is useful when the calculation is memory-bound rather than CPU-bound, and especially when additional MPI ranks or threads can compensate for the slower MVP while enabling larger retained-state spaces.</sup>
+
+
+
+### <a name="milestone12"></a> Milestone 12
+- [x] **Memory management and further optimizations.** 
+- [x] **Fix restart and checkpointing.**
+
+This version of the code (5.0.0) includes a complete revision of the memory footprint. 
+Using several input variables we can now control how the results of the calculations are stored in the memory and/or the disk. The relevant variables are:
+
+- `SAVE_BLOCK=T/F`: Logical flag to trigger block storage. DEBUG enforces T. Default: T.
+*This is used to save the block objects to file at each step of the DMRG, which can be used to restart the calculation from that given step. The block files are stored with the name prefix `BLOCK_FILE` plus a suffix.* 
+
+- `SAVE_ALL_BLOCKS=T/F`: Logical flag to save all blocks (T) or just the last (F). DEBUG enforces T. Default: F 
+*This is activated to save the blocks at any step to a different file. Mostly for debugging purposes, as it can lead to a large number of files and a large memory footprint.*
+
+- `BLOCK_UMAT_CACHE=T/F`: Logical flag to keep all rotation matrices in the block memory. Default=F. 
+*This is used to keep (T) or not (F) the rotation matrices in the block memory. While keeping the rotation matrices in memory can speed up the finite DMRG sweeps, it can lead to  memory overflow in large calculations.* 
+
+- `SAVE_UMAT=T/F`:Logical flag to save rotation matrices to file. Default=T.
+*Rotation matrices are used to measure in DMRG, thus they are stored in the memory or to file according to the value of `BLOCK_UMAT_CACHE`. If `T` the rotation matrices are stored in file with the name prefix `UMAT_FILE` plus a suffix.*
+
+- `SAVE_MEASURE_STATE=T/F`: Logical flag to save SuperBlock state for post-processing measures. Default=T
+*The superblock calculations results are stored to file with the name prefix `MEASURE_FILE` plus a suffix. This is used to save the SuperBlock state at each step, which can be used to perform measurements in post-processing **without** the need to run the DMRG again. This is particularly useful for large calculations, where the DMRG can be time consuming, while the measurements can be performed in a much faster post-processing step.*
+
+- `BLOCK_FILE=block`: Name prefix of the stored block file, used to restart DMRG.
+
+- `UMAT_FILE=umat`:Name suffix of the stored rotation matrices, used to measure in DMRG.
+
+- `MEASURE_FILE=measure`:Name prefix of the stored SuperBlock measurement state.
+
+
+On top of that this version includes a number of optimizations and bug fixes which removed linear growing of memory footprint with the number of DMRG steps. Larger calculations can now be performed with a reasonable memory footprint, while the restart and checkpointing functionality is now fully working.
 
 
 
