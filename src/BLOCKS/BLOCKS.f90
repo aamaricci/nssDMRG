@@ -275,12 +275,11 @@ contains
     logical                               :: bool
     logical                               :: nobasis_
     integer,dimension(size(self%sectors)) :: Dims
-    !
     integer                               :: i
-
     nobasis_=.false.;if(present(nobasis))nobasis_=nobasis
     !
     bool = self%operators%is_valid(self%Dim)
+    !
     if(nobasis_)return
     do i=1,size(self%sectors)
        Dims(i) = dim(self%sectors(i))
@@ -304,7 +303,6 @@ contains
     !if(iorb_==0.AND.ispin_==0)stop "Okey_Block ERROR: iorb == ispin == 0"
     string = okey(iorb_,ispin_,isite_,ilink_)
     !
-    !
   end function okey_block
 
 
@@ -321,21 +319,14 @@ contains
     string = to_lower(str(self%SiteType))
   end function SiteType_block
 
-  ! function Tag_block(self,n) result(string)
-  !   class(block)                  :: self
-  !   integer,optional              :: n
-  !   character(len=:),allocatable :: string
-  !   if(present(n))then
-  !      allocate(string, source=self%BlockTag(1:n))
-  !   else
-  !      allocate(string, source=self%BlockTag)
-  !   endif
-  ! end function tag_block
+
+
+
 
 
   !##################################################################
   !##################################################################
-  !              SHOW 
+  !              INPUT / OUTPUT BLOCKS (SHOW/READ/WRITE)
   !##################################################################
   !##################################################################
   subroutine show_block(self,fmt,wOP,wOMAT,file)
@@ -564,9 +555,11 @@ contains
 
 
 
-  !+------------------------------------------------------------------+
-  !PURPOSE:  Put/Write/Load Omatrices in the block dictionary
-  !+------------------------------------------------------------------+
+  !##################################################################
+  !##################################################################
+  !              INPUT / OUTPUT O-MATRICES (PUT/READ/WRITE)
+  !##################################################################
+  !##################################################################
   subroutine put_omat_block(self,key,op,type)
     class(block)                   :: self
     character(len=*),intent(in)    :: key
@@ -578,30 +571,58 @@ contains
 
 
 
-
-
-
-  subroutine write_omat_block(self,key,op,type,suffix,append)
-    class(block)                   :: self
-    character(len=*),intent(in)    :: key
-    type(sparse_matrix),intent(in) :: op
-    character(len=*),intent(in)    :: type
-    character(len=*),intent(in)    :: suffix
-    logical,optional               :: append
+subroutine write_omat_block(self,key,op,type,suffix,append)
+  class(block)                   :: self
+  character(len=*),intent(in)    :: key
+  type(sparse_matrix),intent(in) :: op
+  character(len=*),intent(in)    :: type
+  character(len=*),intent(in)    :: suffix
+  logical,optional               :: append
+  integer :: unit
+  logical :: append_
+  append_=.true.;if(present(append))append_=append
+  call write_umat_split_script()
+  unit = fopen(str(umat_file)//str(suffix),append=append_)
+  write(unit,*)str(key)
+  if(str(type)=="")then
+    write(unit,*)"none"
+  else
+    write(unit,*)str(type)
+  endif
+  call op%write(unit=unit)
+  close(unit)
+  contains
+  subroutine write_umat_split_script()
     integer :: unit
-    logical :: append_
-    append_=.true.;if(present(append))append_=append
-    call write_umat_split_script()
-    unit = fopen(str(umat_file)//str(suffix),append=append_)
-    write(unit,*)str(key)
-    if(str(type)=="")then
-       write(unit,*)"none"
-    else
-       write(unit,*)str(type)
-    endif
-    call op%write(unit=unit)
+    open(free_unit(unit),file=str(restart_output_dir)//"split_umat.sh")
+    write(unit,'(A)')"#!/usr/bin/env bash"
+    write(unit,'(A)')"set -euo pipefail"
+    write(unit,'(A)')"dir=""$(cd ""$(dirname ""$0"")"" && pwd)"""
+    write(unit,'(A)')"split_side() {"
+    write(unit,'(A)')"  side=""$1"""
+    write(unit,'(A)')"  input=""$dir/umat_${side}.restart"""
+    write(unit,'(A)')"  [[ -f ""$input"" ]] || return 0"
+    write(unit,'(A)')"  awk -v side=""$side"" -v dir=""$dir"" '"
+    write(unit,'(A)')"  function trim(s){gsub(/^[[:space:]]+|[[:space:]]+$/, """", s); return s}"
+    write(unit,'(A)')"  {"
+    write(unit,'(A)')"    key=trim($0); if(key=="""") next"
+    write(unit,'(A)')"    if((getline type)<=0) exit; type=trim(type)"
+    write(unit,'(A)')"    if((getline dims)<=0) exit; split(trim(dims), d, /[[:space:]]+/); nrow=d[1]"
+    write(unit,'(A)')"    out=dir ""/umat_L"" key ""_"" side "".restart"""
+    write(unit,'(A)')"    print key > out; print type >> out; print dims >> out"
+    write(unit,'(A)')"    for(i=1;i<=nrow;i++){"
+    write(unit,'(A)')"      if((getline line)<=0) exit; print line >> out"
+    write(unit,'(A)')"      split(trim(line), r, /[[:space:]]+/); n=r[1]"
+    write(unit,'(A)')"      for(j=1;j<=n;j++){ if((getline line)<=0) exit; print line >> out }"
+    write(unit,'(A)')"    }"
+    write(unit,'(A)')"  }' ""$input"""
+    write(unit,'(A)')"}"
+    write(unit,'(A)')"split_side left"
+    write(unit,'(A)')"split_side right"
     close(unit)
-  end subroutine write_omat_block
+    call execute_command_line("chmod +x "//str(restart_output_dir)//"split_umat.sh")
+  end subroutine write_umat_split_script
+end subroutine write_omat_block
 
 
 
@@ -645,12 +666,15 @@ contains
     logical                        :: loaded
     integer                        :: iostat
     !
+    !Attempt to read from umat_file first. Return on succed
     call read_umat_from_prefix(str(umat_file),loaded)
     if(loaded)return
+    !
+    !Attempt to read from umat_restart_file if umat_file is missing
     call read_umat_from_prefix(str(umat_restart_file),loaded)
-
+    !
   contains
-
+    !
     subroutine read_umat_from_prefix(prefix,loaded)
       character(len=*),intent(in) :: prefix
       logical,intent(out)         :: loaded
@@ -689,55 +713,29 @@ contains
          loaded=.true.
       enddo
     end subroutine read_umat_from_prefix
+    !
+    function umat_suffix_from(suffix,length) result(file_suffix)
+      character(len=*),intent(in)    :: suffix
+      integer,intent(in)             :: length
+      character(len=:),allocatable   :: file_suffix
+      character(len=:),allocatable   :: suffix_
+      suffix_=to_lower(str(suffix))
+      if(index(suffix_,"left")>0)then
+         file_suffix=suffix_dmrg("left",length)//".restart"
+      elseif(index(suffix_,"right")>0)then
+         file_suffix=suffix_dmrg("right",length)//".restart"
+      else
+         file_suffix=""
+      endif
+    end function umat_suffix_from
+    !
   end subroutine read_umat_files
 
 
-  function umat_suffix_from(suffix,length) result(file_suffix)
-    character(len=*),intent(in)    :: suffix
-    integer,intent(in)             :: length
-    character(len=:),allocatable   :: file_suffix
-    character(len=:),allocatable   :: suffix_
-    suffix_=to_lower(str(suffix))
-    if(index(suffix_,"left")>0)then
-       file_suffix=suffix_dmrg("left",length)//".restart"
-    elseif(index(suffix_,"right")>0)then
-       file_suffix=suffix_dmrg("right",length)//".restart"
-    else
-       file_suffix=""
-    endif
-  end function umat_suffix_from
+  
 
 
-  subroutine write_umat_split_script()
-    integer :: unit
-    open(free_unit(unit),file=str(restart_output_dir)//"split_umat.sh")
-    write(unit,'(A)')"#!/usr/bin/env bash"
-    write(unit,'(A)')"set -euo pipefail"
-    write(unit,'(A)')"dir=""$(cd ""$(dirname ""$0"")"" && pwd)"""
-    write(unit,'(A)')"split_side() {"
-    write(unit,'(A)')"  side=""$1"""
-    write(unit,'(A)')"  input=""$dir/umat_${side}.restart"""
-    write(unit,'(A)')"  [[ -f ""$input"" ]] || return 0"
-    write(unit,'(A)')"  awk -v side=""$side"" -v dir=""$dir"" '"
-    write(unit,'(A)')"  function trim(s){gsub(/^[[:space:]]+|[[:space:]]+$/, """", s); return s}"
-    write(unit,'(A)')"  {"
-    write(unit,'(A)')"    key=trim($0); if(key=="""") next"
-    write(unit,'(A)')"    if((getline type)<=0) exit; type=trim(type)"
-    write(unit,'(A)')"    if((getline dims)<=0) exit; split(trim(dims), d, /[[:space:]]+/); nrow=d[1]"
-    write(unit,'(A)')"    out=dir ""/umat_L"" key ""_"" side "".restart"""
-    write(unit,'(A)')"    print key > out; print type >> out; print dims >> out"
-    write(unit,'(A)')"    for(i=1;i<=nrow;i++){"
-    write(unit,'(A)')"      if((getline line)<=0) exit; print line >> out"
-    write(unit,'(A)')"      split(trim(line), r, /[[:space:]]+/); n=r[1]"
-    write(unit,'(A)')"      for(j=1;j<=n;j++){ if((getline line)<=0) exit; print line >> out }"
-    write(unit,'(A)')"    }"
-    write(unit,'(A)')"  }' ""$input"""
-    write(unit,'(A)')"}"
-    write(unit,'(A)')"split_side left"
-    write(unit,'(A)')"split_side right"
-    close(unit)
-    call execute_command_line("chmod +x "//str(restart_output_dir)//"split_umat.sh")
-  end subroutine write_umat_split_script
+
 
 
 END MODULE BLOCKS

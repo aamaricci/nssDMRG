@@ -19,7 +19,7 @@ MODULE DMRG_SUPERBLOCK
   public :: sb_save_measure_state
   public :: sb_load_measure_state
   public :: sb_save_measure_blocks
-
+  public :: sb_load_measure_blocks
 
   integer :: ierr
   integer :: ispin
@@ -647,6 +647,25 @@ contains
   end subroutine sb_delete_Hv
 
 
+
+
+
+
+
+
+
+
+  !##################################################################
+  !##################################################################
+  !           SAVE/LOAD MEASURE STATE
+  !includes:
+  ! * gs_energy
+  ! * gs_vector
+  ! * sb_states
+  ! * sb_sector
+  !
+  !##################################################################
+  !##################################################################  
   subroutine sb_save_measure_state()
    integer                                :: unit,Nstates,Nenergy,Nrow,Ncol,Nqn
    character(len=:),allocatable           :: file
@@ -679,7 +698,7 @@ contains
     endif
     !
     if(MpiMaster)then
-       file = measure_state_file()
+       file = str(measure_file)//".restart"
        open(free_unit(unit),file=str(file))
        write(unit,*)"#NSSDMRG_MEASURE_STATE"
        write(unit,*)MpiSize
@@ -697,7 +716,7 @@ contains
        write(unit,*)Nrow,Ncol
        close(unit)
        !
-       file = measure_vector_file()
+       file = str(measure_file)//".gs.restart"
        open(free_unit(unit),file=str(file))
        write(unit,*)gs_full
        close(unit)
@@ -710,7 +729,7 @@ contains
   subroutine sb_load_measure_state(found)
     logical,optional                      :: found
     logical                               :: file_exists
-    integer                               :: unit,file_size
+    integer                               :: unit,Ncores
     integer                               :: left_length,right_length,stored_current_L
     integer                               :: Nstates,Nenergy,Nrow,Ncol,Nqn
     character(len=64)                     :: magic
@@ -722,42 +741,56 @@ contains
     real(8),dimension(:,:),allocatable    :: gs_full
 #endif
     !
-    file = measure_state_file()
-    vector_file = measure_vector_file()
+    file        = str(measure_file)//".restart"
+    vector_file = str(measure_file)//".gs.restart"
     inquire(file=str(file),exist=file_exists)
     if(.not.file_exists)then
-       file = measure_restart_state_file()
-       vector_file = measure_restart_vector_file()
+       file        = str(measure_restart_file)//".restart"
+       vector_file = str(measure_restart_file)//".restart"
        inquire(file=str(file),exist=file_exists)
     endif
     if(present(found))found=file_exists
     if(.not.file_exists)return
     !
+    !Read text:
     open(free_unit(unit),file=str(file))
     read(unit,*)magic
     if(str(magic)/="#NSSDMRG_MEASURE_STATE")stop "sb_load_measure_state error: unsupported file format"
-    read(unit,*)file_size
-    if(file_size/=MpiSize)stop "sb_load_measure_state error: MPI size mismatch"
+    !
+    !Read MpiSize_Ncores
+    read(unit,*)Ncores
+    if(Ncores/=MpiSize)then   
+         if(MpiMaster)write(LOGfile,*) "sb_load_measure_state warning: MPI size mismatch"
+    endif
+    !
+    !Read block dimensions and current_L
     read(unit,*)left_length,right_length,stored_current_L
     if(left_length/=left%length)stop "sb_load_measure_state error: left block length mismatch"
     if(right_length/=right%length)stop "sb_load_measure_state error: right block length mismatch"
     current_L = stored_current_L
+    !
+    !Read number of quantum numbers (Left) + QN target
     read(unit,*)Nqn
     if(allocated(current_target_qn))deallocate(current_target_qn)
     allocate(current_target_qn(Nqn))
     read(unit,*)current_target_qn
+    !
+    !Read SB_States
     read(unit,*)Nstates
     if(allocated(sb_states))deallocate(sb_states)
     allocate(sb_states(Nstates))
     read(unit,*)sb_states
+    !
+    !Read SB_Sector
     call sb_sector%read(unit=unit)
     read(unit,*)Nenergy
+    !
+    !Read GS_energy and GS_vector
     if(allocated(gs_energy))deallocate(gs_energy)
     allocate(gs_energy(Nenergy))
     read(unit,*)gs_energy
     read(unit,*)Nrow,Ncol
     close(unit)
-    !
     call sb_build_dims(quiet=.true.)
     if(allocated(gs_vector))deallocate(gs_vector)
     allocate(gs_vector(sb_vecDim_Hv(),Ncol))
@@ -783,31 +816,6 @@ contains
   end subroutine sb_load_measure_state
 
 
-
-  function measure_state_file() result(file)
-    character(len=:),allocatable :: file
-    file = str(measure_file)//".restart"
-  end function measure_state_file
-
-
-  function measure_vector_file() result(file)
-    character(len=:),allocatable :: file
-    file = str(measure_file)//".gs.restart"
-  end function measure_vector_file
-
-
-  function measure_restart_state_file() result(file)
-    character(len=:),allocatable :: file
-    file = str(measure_restart_file)//".restart"
-  end function measure_restart_state_file
-
-
-  function measure_restart_vector_file() result(file)
-    character(len=:),allocatable :: file
-    file = str(measure_restart_file)//".gs.restart"
-  end function measure_restart_vector_file
-
-
   subroutine sb_save_measure_blocks()
     call left%save(suffix_dmrg('left',type='i')//".restart",gzip=.false.,&
          include_omatrices=.false.,file_prefix=str(measure_block_file))
@@ -816,6 +824,32 @@ contains
   end subroutine sb_save_measure_blocks
 
 
+
+  subroutine sb_load_measure_blocks()
+   logical                      :: left_file,right_file
+   character(len=:),allocatable :: left_suffix,right_suffix,prefix
+   !
+   left_suffix  = suffix_dmrg('left',type='i')//".restart"
+   right_suffix = suffix_dmrg('right',type='i')//".restart"
+   !
+   !Inquire for left and right measure_block_file files: it normal or restart file
+   prefix=str(measure_block_file)
+   inquire(file=str(prefix)//str(left_suffix),exist=left_file)
+   inquire(file=str(prefix)//str(right_suffix),exist=right_file)
+   if(.not.(left_file.and.right_file))then
+      prefix=str(measure_block_restart_file)
+      inquire(file=str(prefix)//str(left_suffix),exist=left_file)
+      inquire(file=str(prefix)//str(right_suffix),exist=right_file)
+   endif
+   !
+   !IF files have been found: load, ELSE raise a WARNING
+   if(left_file.and.right_file)then
+      call left%load(str(left_suffix),file_prefix=str(prefix))
+      call right%load(str(right_suffix),file_prefix=str(prefix))
+   elseif(left_file.neqv.right_file)then
+      if(MpiMaster)write(LOGfile,*)"Init_Measure_DMRG WARNING: incomplete measurement block restart pair found."
+   endif
+ end subroutine sb_load_measure_blocks
 
 
 
@@ -908,47 +942,3 @@ END MODULE DMRG_SUPERBLOCK
 
 
 
-
-
-
-!   function sb_vecDim_Hv() result(vecDim)
-!     integer                          :: vecDim           !vector or vector chunck dimension
-!     real(8),dimension(:),allocatable :: qn
-!     integer                          :: q,Nsb,i,unit
-!     !
-!     Nsb  = size(sb_sector)
-!     if(allocated(Dls))deallocate(Dls)
-!     if(allocated(Drs))deallocate(Drs)
-!     if(allocated(mpiDls))deallocate(mpiDls)
-!     if(allocated(mpiDl))deallocate(mpiDl)
-!     allocate(Dls(Nsb),Drs(Nsb),mpiDls(Nsb),mpiDl(Nsb))
-!     do q=1,Nsb
-!        qn     = sb_sector%qn(index=q)
-!        Dls(q) = sector_qn_dim(left%sectors(1),qn)
-!        Drs(q) = sector_qn_dim(right%sectors(1),current_target_qn - qn)
-!     enddo
-! #ifdef _MPI
-!     if(MpiStatus)then
-!        do q=1,Nsb
-!           mpiDls(q) = Dls(q)/MpiSize
-!           if(MpiRank < mod(Dls(q),MpiSize))mpiDls(q) = mpiDls(q)+1
-!           mpiDl(q)  = Drs(q)*mpiDls(q)
-!        enddo
-!     else
-!        do q=1,Nsb
-!           mpiDls(q)= Dls(q)
-!           mpiDl(q)  = Drs(q)*mpiDls(q)
-!        enddo
-!        if(sum(mpiDl)/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
-!     endif
-! #else
-!     do q=1,Nsb
-!        mpiDls(q)= Dls(q)
-!        mpiDl(q)  = Drs(q)*mpiDls(q)
-!     enddo
-!     if(sum(mpiDl)/=size(sb_states))stop "sb_vecDim_Hv error: no MPI but vecDim != m_sb"
-! #endif
-!     !
-!     vecDim = sum(mpiDl)
-!     kb_vecDim = vecDim*DATA_kb_size
-!   end function sb_vecDim_Hv

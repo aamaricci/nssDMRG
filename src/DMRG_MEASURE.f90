@@ -31,8 +31,7 @@ module DMRG_MEASURE
      module procedure :: Measure_DMRG_scalar
      module procedure :: Measure_DMRG_vector
   end interface Measure_DMRG
-
-
+!
   integer                                      :: Nsb,isb,vecDim
   real(8),dimension(:),allocatable             :: qn,qm
   real(8),dimension(:),allocatable             :: dq
@@ -40,9 +39,15 @@ module DMRG_MEASURE
   type(tstates),dimension(:),allocatable       :: Li,Ri
   logical                                      :: measure_status=.false.
   logical                                      :: measure_positions_filtered=.false.
-
   character(:),allocatable                     :: string
-
+!
+!
+!Measure State: a meta-object containing all the SB info needed for a measurement
+! * sb_states
+! * gs_vector
+! * sb_sector
+! * quantum numbers
+!
 contains
 
 
@@ -56,23 +61,44 @@ contains
     integer                          :: ilat,i,f,m
     logical                          :: found_measure_state
     logical                          :: need_measure_state
+    character(len=:),allocatable     :: default_suffix,current_suffix
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: init measure"
-#ifdef _MPI
-    if(MpiStatus.AND.MpiMaster)write(LOGfile,*)"DEBUG: using MPI"
-#endif
 #endif
     !
-    need_measure_state = (.not.allocated(sb_states)).or.(.not.allocated(gs_vector)).or.size(sb_sector)==0
-    if(need_measure_state)call load_measure_blocks_if_available()
-    if(MpiMaster)call load_measure_umat_files()
+    !Check if BLOCK/MEASURE states is available.
+    need_measure_state = (.not.allocated(sb_states)).or.(.not.allocated(gs_vector)).OR.(size(sb_sector)==0)
     !
+    !Load Measure Blocks (if required)
+    if(need_measure_state)call sb_load_measure_blocks()
+    !
+    !Load Umatrices
+    if(MpiMaster)then 
+      if(size(left%omatrices)<=1)then
+         default_suffix = suffix_dmrg('left',type='i')//".restart"
+         current_suffix = suffix_dmrg('left')//".restart"
+         call left%load_umat(str(default_suffix),left%length)
+         if(size(left%omatrices)<=1.and.str(current_suffix)/=str(default_suffix))&
+              call left%load_umat(str(current_suffix),left%length)
+      endif
+      !
+      if(size(right%omatrices)<=1)then
+         default_suffix = suffix_dmrg('right',type='i')//".restart"
+         current_suffix = suffix_dmrg('right')//".restart"
+         call right%load_umat(str(default_suffix),right%length)
+         if(size(right%omatrices)<=1.and.str(current_suffix)/=str(default_suffix))&
+              call right%load_umat(str(current_suffix),right%length)
+      endif
+    endif
+    !
+    !Load Measure State (if required) (soft check)
     if(need_measure_state)then
        call sb_load_measure_state(found_measure_state)
        if(.not.found_measure_state)then
           if(MpiMaster)write(LOGfile,*)"Init_Measure_DMRG: no saved SuperBlock measurement state found."
        endif
     endif
+    !
     !
     if(MpiMaster)omat_dims = [size(left%omatrices),size(right%omatrices)]
 #ifdef _MPI
@@ -114,68 +140,21 @@ contains
        m = (Ldmrg-1)/2
        !
        b2gMap(f) = 1
-       ! g2bMap(1) = f
        do i=1,m
           b2gMap(f+i)  = 2*i
           b2gMap(f-i)  = 2*i+1
-          ! g2bMap(2*i)  = f+i
-          ! g2bMap(2*i+1)= f-i
        enddo
     else
        b2gMap = (/(i,i=1,Ldmrg)/)
-       ! g2bMap = b2gMap
     endif
   end subroutine Init_Measure_dmrg
 
 
-  subroutine load_measure_blocks_if_available()
-    logical :: left_file,right_file
-    character(len=:),allocatable :: left_suffix,right_suffix,prefix
-    !
-    left_suffix  = suffix_dmrg('left',type='i')//".restart"
-    right_suffix = suffix_dmrg('right',type='i')//".restart"
-    !
-    prefix = str(measure_block_file)
-    inquire(file=str(prefix)//str(left_suffix),exist=left_file)
-    inquire(file=str(prefix)//str(right_suffix),exist=right_file)
-    if(.not.(left_file.and.right_file))then
-       prefix = str(measure_block_restart_file)
-       inquire(file=str(prefix)//str(left_suffix),exist=left_file)
-       inquire(file=str(prefix)//str(right_suffix),exist=right_file)
-    endif
-    !
-    if(left_file.and.right_file)then
-       call left%load(str(left_suffix),file_prefix=str(prefix))
-       call right%load(str(right_suffix),file_prefix=str(prefix))
-    elseif(left_file.neqv.right_file)then
-       if(MpiMaster)write(LOGfile,*)"Init_Measure_DMRG WARNING: incomplete measurement block restart pair found."
-    endif
-  end subroutine load_measure_blocks_if_available
-
-
-  subroutine load_measure_umat_files()
-    character(len=:),allocatable :: default_suffix,current_suffix
-    !
-    if(size(left%omatrices)<=1)then
-       default_suffix = suffix_dmrg('left',type='i')//".restart"
-       current_suffix = suffix_dmrg('left')//".restart"
-       call left%load_umat(str(default_suffix),left%length)
-       if(size(left%omatrices)<=1.and.str(current_suffix)/=str(default_suffix))&
-            call left%load_umat(str(current_suffix),left%length)
-    endif
-    !
-    if(size(right%omatrices)<=1)then
-       default_suffix = suffix_dmrg('right',type='i')//".restart"
-       current_suffix = suffix_dmrg('right')//".restart"
-       call right%load_umat(str(default_suffix),right%length)
-       if(size(right%omatrices)<=1.and.str(current_suffix)/=str(default_suffix))&
-            call right%load_umat(str(current_suffix),right%length)
-    endif
-  end subroutine load_measure_umat_files
 
 
 
   subroutine End_measure_DMRG()
+    type(sparse_matrix) :: Ileft,Iright
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: end measure"
 #endif
@@ -185,25 +164,23 @@ contains
     if(allocated(Li))deallocate(Li)
     if(allocated(Ri))deallocate(Ri)
     call sb_delete_dims()
-    if(.not.block_umat_cache)call clear_measure_omatrices()
+    if(.not.block_umat_cache)then   
+      if(MpiMaster)then
+        Ileft  = id(left%Dim)
+        Iright = id(right%Dim)
+        call left%omatrices%free()
+        call right%omatrices%free()
+        call left%put_omat("1",Ileft,"")
+        call right%put_omat("1",Iright,"")
+        call Ileft%free()
+        call Iright%free()
+      endif
+    endif
     measure_status=.false.
   end subroutine End_measure_DMRG
 
 
-  subroutine clear_measure_omatrices()
-    type(sparse_matrix) :: Ileft,Iright
-    !
-    if(MpiMaster)then
-       Ileft  = id(left%Dim)
-       Iright = id(right%Dim)
-       call left%omatrices%free()
-       call right%omatrices%free()
-       call left%put_omat("1",Ileft,"")
-       call right%put_omat("1",Iright,"")
-       call Ileft%free()
-       call Iright%free()
-    endif
-  end subroutine clear_measure_omatrices
+  
 
 
 
@@ -236,6 +213,7 @@ contains
        avOp = zero
        return
     endif
+    !Check if `pos` is "measureable": this requires to have checked all positions AND actual position is available.
     if((.not.measure_positions_filtered).and.(.not.Measure_Pos_Available_Global(pos)))then
        if(MpiMaster)write(LOGfile,*)"Measure_Op_DMRG: unavailable position",pos
        avOp = zero
@@ -392,163 +370,10 @@ contains
   end subroutine Measure_DMRG_vector
 
 
-  subroutine filter_measure_positions(pos_in,pos_out)
-    integer,dimension(:),intent(in)      :: pos_in
-    integer,dimension(:),allocatable     :: pos_out
-    integer,dimension(:),allocatable     :: mask
-    integer                              :: i,nvalid
-    logical                              :: available
-    !
-    allocate(mask(size(pos_in)))
-    mask=0
-    if(MpiMaster)then
-       do i=1,size(pos_in)
-          available = Measure_Pos_Available(pos_in(i))
-          if(available)mask(i)=1
-       enddo
-    endif
-#ifdef _MPI
-    if(MpiStatus)call Bcast_MPI(MpiComm,mask)
-#endif
-    nvalid=0
-    do i=1,size(pos_in)
-       if(mask(i)==1)nvalid=nvalid+1
-    enddo
-    allocate(pos_out(nvalid))
-    nvalid=0
-    do i=1,size(pos_in)
-       if(mask(i)==1)then
-          nvalid=nvalid+1
-          pos_out(nvalid)=pos_in(i)
-       elseif(MpiMaster)then
-          write(LOGfile,*)"Measure_DMRG: skipping unavailable position",pos_in(i)
-       endif
-    enddo
-    deallocate(mask)
-  end subroutine filter_measure_positions
+  
 
 
-  function Measure_Pos_Available(pos) result(available)
-    integer,intent(in) :: pos
-    logical            :: available
-    integer            :: L,R,N,i
-    character(len=1)   :: label
-    !
-    L = left%length
-    R = right%length
-    N = L+R
-    available = pos>=1.AND.pos<=N
-    if(available)then
-       label='l'; if(pos>L)label='r'
-       i=b2gMap(pos); if(pos>L)i=b2gMap(N+1-pos)
-       if(MpiMaster)then
-          select case(label)
-          case("l")
-             available = side_measure_pos_available(left%omatrices,i,L)
-          case("r")
-             available = side_measure_pos_available(right%omatrices,i,R)
-          end select
-       endif
-    endif
-  end function Measure_Pos_Available
-
-
-  function Measure_Pos_Available_Global(pos) result(available)
-    integer,intent(in) :: pos
-    logical            :: available
-    integer            :: flag
-    !
-    flag=0
-    if(MpiMaster)then
-       available = Measure_Pos_Available(pos)
-       if(available)flag=1
-    endif
-#ifdef _MPI
-    if(MpiStatus)call Bcast_MPI(MpiComm,flag)
-#endif
-    available = flag==1
-  end function Measure_Pos_Available_Global
-
-
-  function Measure_Corr_Available(pos,nstep) result(available)
-    integer,intent(in)  :: pos
-    integer,optional    :: nstep
-    logical             :: available
-    integer             :: flag
-    !
-    flag=0
-    if(MpiMaster)then
-       available = Measure_Corr_Available_Local(pos,nstep)
-       if(available)flag=1
-    endif
-#ifdef _MPI
-    if(MpiStatus)call Bcast_MPI(MpiComm,flag)
-#endif
-    available = flag==1
-  end function Measure_Corr_Available
-
-
-  function Measure_Corr_Available_Local(pos,nstep) result(available)
-    integer,intent(in) :: pos
-    integer,optional   :: nstep
-    logical            :: available
-    integer            :: L,R,N,i,istart,iend,it
-    character(len=1)   :: label
-    !
-    L = left%length
-    R = right%length
-    N = L+R
-    available = pos>=1.AND.pos<=N
-    if(.not.available)return
-    !
-    label='l'; if(pos>L)label='r'
-    i=b2gMap(pos); if(pos>L)i=b2gMap(N+1-pos)
-    istart=i
-    select case(label)
-    case("l")
-       iend=L-1;if(present(nstep))iend=istart+nstep
-       if(iend>L-1)then
-          available=.false.
-          return
-       endif
-       do it=istart+1,iend
-          if(.not.left%omatrices%has_key(str(it)))then
-             available=.false.
-             return
-          endif
-       enddo
-    case("r")
-       iend=R-1;if(present(nstep))iend=istart+nstep
-       if(iend>R-1)then
-          available=.false.
-          return
-       endif
-       do it=istart+1,iend
-          if(.not.right%omatrices%has_key(str(it)))then
-             available=.false.
-             return
-          endif
-       enddo
-    end select
-  end function Measure_Corr_Available_Local
-
-
-  function side_measure_pos_available(omatrices,i,L) result(available)
-    type(operators_list) :: omatrices
-    integer,intent(in)   :: i,L
-    logical              :: available
-    integer              :: it
-    !
-    available=.true.
-    if(i>1)available = omatrices%has_key(str(i-1)).or.omatrices%has_key(str(i))
-    if(.not.available)return
-    do it=i,L-1
-       if(.not.omatrices%has_key(str(it)))then
-          available=.false.
-          return
-       endif
-    enddo
-  end function side_measure_pos_available
+  
 
 
 
@@ -1084,11 +909,179 @@ contains
 
 
 
-  !#################################
-  !#################################
+
+!##################################################################
+!           AUXILIARY FUNCTIONS USED IN THIS MODULE
+!##################################################################
+function Measure_Pos_Available(pos) result(available)
+  integer,intent(in) :: pos
+  logical            :: available
+  integer            :: L,R,N,i
+  character(len=1)   :: label
+  !
+  L = left%length
+  R = right%length
+  N = L+R
+  available = pos>=1.AND.pos<=N
+  if(available)then
+     label='l'; if(pos>L)label='r'
+     i=b2gMap(pos); if(pos>L)i=b2gMap(N+1-pos)
+     if(MpiMaster)then
+        select case(label)
+        case("l")
+           available = side_measure_pos_available(left%omatrices,i,L)
+        case("r")
+           available = side_measure_pos_available(right%omatrices,i,R)
+        end select
+     endif
+  endif
+end function Measure_Pos_Available
+
+
+function Measure_Pos_Available_Global(pos) result(available)
+  integer,intent(in) :: pos
+  logical            :: available
+  integer            :: flag
+  !
+  flag=0
+  if(MpiMaster)then
+     available = Measure_Pos_Available(pos)
+     if(available)flag=1
+  endif
+#ifdef _MPI
+  if(MpiStatus)call Bcast_MPI(MpiComm,flag)
+#endif
+  available = flag==1
+end function Measure_Pos_Available_Global
+
+
+function Measure_Corr_Available(pos,nstep) result(available)
+  integer,intent(in)  :: pos
+  integer,optional    :: nstep
+  logical             :: available
+  integer             :: flag
+  !
+  flag=0
+  if(MpiMaster)then
+     available = Measure_Corr_Available_Local(pos,nstep)
+     if(available)flag=1
+  endif
+#ifdef _MPI
+  if(MpiStatus)call Bcast_MPI(MpiComm,flag)
+#endif
+  available = flag==1
+end function Measure_Corr_Available
+
+
+function Measure_Corr_Available_Local(pos,nstep) result(available)
+  integer,intent(in) :: pos
+  integer,optional   :: nstep
+  logical            :: available
+  integer            :: L,R,N,i,istart,iend,it
+  character(len=1)   :: label
+  !
+  L = left%length
+  R = right%length
+  N = L+R
+  available = pos>=1.AND.pos<=N
+  if(.not.available)return
+  !
+  label='l'; if(pos>L)label='r'
+  i=b2gMap(pos); if(pos>L)i=b2gMap(N+1-pos)
+  istart=i
+  select case(label)
+  case("l")
+     iend=L-1;if(present(nstep))iend=istart+nstep
+     if(iend>L-1)then
+        available=.false.
+        return
+     endif
+     do it=istart+1,iend
+        if(.not.left%omatrices%has_key(str(it)))then
+           available=.false.
+           return
+        endif
+     enddo
+  case("r")
+     iend=R-1;if(present(nstep))iend=istart+nstep
+     if(iend>R-1)then
+        available=.false.
+        return
+     endif
+     do it=istart+1,iend
+        if(.not.right%omatrices%has_key(str(it)))then
+           available=.false.
+           return
+        endif
+     enddo
+  end select
+end function Measure_Corr_Available_Local
 
 
 
+ subroutine filter_measure_positions(pos_in,pos_out)
+   integer,dimension(:),intent(in)      :: pos_in
+   integer,dimension(:),allocatable     :: pos_out
+   integer,dimension(:),allocatable     :: mask
+   integer                              :: i,nvalid
+   logical                              :: available
+   !
+   allocate(mask(size(pos_in)))
+   mask=0
+   if(MpiMaster)then
+      do i=1,size(pos_in)
+         available = Measure_Pos_Available(pos_in(i))
+         if(available)mask(i)=1
+      enddo
+   endif
+#ifdef _MPI
+   if(MpiStatus)call Bcast_MPI(MpiComm,mask)
+#endif
+   nvalid=0
+   do i=1,size(pos_in)
+      if(mask(i)==1)nvalid=nvalid+1
+   enddo
+   allocate(pos_out(nvalid))
+   nvalid=0
+   do i=1,size(pos_in)
+      if(mask(i)==1)then
+         nvalid=nvalid+1
+         pos_out(nvalid)=pos_in(i)
+      elseif(MpiMaster)then
+         write(LOGfile,*)"Measure_DMRG: skipping unavailable position",pos_in(i)
+      endif
+   enddo
+   deallocate(mask)
+ end subroutine filter_measure_positions
+
+ 
+
+ function side_measure_pos_available(omatrices,i,L) result(available)
+   type(operators_list) :: omatrices
+   integer,intent(in)   :: i,L
+   logical              :: available
+   integer              :: it
+   !
+   available=.true.
+   if(i>1)available = omatrices%has_key(str(i-1)).or.omatrices%has_key(str(i))
+   if(.not.available)return
+   do it=i,L-1
+      if(.not.omatrices%has_key(str(it)))then
+         available=.false.
+         return
+      endif
+   enddo
+ end function side_measure_pos_available
+
+
+
+
+
+
+
+!##################################################################
+!                        WRITE OUTPUT
+!##################################################################
   subroutine write_user_scalar(file,val,x)
     character(len=*) :: file
     real(8)          :: val
