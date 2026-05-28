@@ -582,6 +582,7 @@ subroutine write_omat_block(self,key,op,type,suffix,append)
   logical :: append_
   append_=.true.;if(present(append))append_=append
   call write_umat_split_script()
+  call inherit_restart_umat_file(str(suffix),append_)
   unit = fopen(str(umat_file)//str(suffix),append=append_)
   write(unit,*)str(key)
   if(str(type)=="")then
@@ -622,6 +623,33 @@ subroutine write_omat_block(self,key,op,type,suffix,append)
     close(unit)
     call execute_command_line("chmod +x "//str(restart_output_dir)//"split_umat.sh")
   end subroutine write_umat_split_script
+
+  subroutine inherit_restart_umat_file(suffix,append)
+    character(len=*),intent(in) :: suffix
+    logical,intent(in)         :: append
+    character(len=:),allocatable :: input_file,output_file
+    character(len=4096)          :: line
+    integer                      :: in_unit,out_unit,io
+    logical                      :: input_exists,output_exists
+    !
+    if(.not.append)return
+    input_file  = str(umat_restart_file)//str(suffix)
+    output_file = str(umat_file)//str(suffix)
+    inquire(file=str(output_file),exist=output_exists)
+    if(output_exists)return
+    inquire(file=str(input_file),exist=input_exists)
+    if(.not.input_exists)return
+    !
+    open(free_unit(in_unit),file=str(input_file),status="old",action="read")
+    open(free_unit(out_unit),file=str(output_file),status="replace",action="write")
+    do
+       read(in_unit,'(A)',iostat=io)line
+       if(io/=0)exit
+       write(out_unit,'(A)')trim(line)
+    enddo
+    close(in_unit)
+    close(out_unit)
+  end subroutine inherit_restart_umat_file
 end subroutine write_omat_block
 
 
