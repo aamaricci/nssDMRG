@@ -174,6 +174,7 @@ contains
     integer                          :: mtr
     integer                          :: m_left,m_right
     integer                          :: m_s,m_e
+    integer                          :: m_max
     integer                          :: j_
     integer                          :: m_err(1)
     real(8)                          :: e_,err
@@ -201,11 +202,16 @@ contains
        if(MpiMaster)then
           !Build Truncated Density Matrices:
           call start_timer("Renormalize "//to_lower(str(label)));t0=t_start()
-          if(Mstates/=0)then
-             m_s   = min(Mstates,m_left,size(rho_left_evals))
-          elseif(Estates/=0d0)then
+          m_max = min(m_left,size(rho_left_evals))
+          if(Estates>0d0)then
              m_err = minloc(abs(1d0-cumulate(rho_left_evals)-Estates))
-             m_s   = m_err(1)
+             m_s   = min(m_err(1),m_max)
+             if(Mstates>0.and.m_s>Mstates)then
+                if(MpiMaster)write(LOGfile,*)"renormalize_block WARNING: Mdmrg caps Edmrg left states from",m_s,"to",Mstates
+                m_s = Mstates
+             endif
+          elseif(Mstates>0)then
+             m_s   = min(Mstates,m_max)
           else
              stop "Mdmrg=Edmrg=0 can not fix a threshold for the RDM"
           endif
@@ -214,7 +220,7 @@ contains
           j_=m_s
           do i=j_+1,size(rho_left_evals)
              err = abs(e_-rho_left_evals(i))/e_
-             if(err<=deg_evals_threshold)m_s=m_s+1
+             if(err<=deg_evals_threshold.and.m_s<m_max)m_s=m_s+1
           enddo
           !>truncation-rotation matrices:
           truncation_error_left  = 1d0 - sum(rho_left_evals(1:m_s))
@@ -271,11 +277,16 @@ contains
        if(MpiMaster)then
           !Build Truncated Density Matrices:
           call start_timer("Renormalize "//to_lower(str(label)));t0=t_start()
-          if(Mstates/=0)then
-             m_e   = min(Mstates,m_right,size(rho_right_evals))
-          elseif(Estates/=0d0)then
+          m_max = min(m_right,size(rho_right_evals))
+          if(Estates>0d0)then
              m_err = minloc(abs(1d0-cumulate(rho_right_evals)-Estates))
-             m_e   = m_err(1)
+             m_e   = min(m_err(1),m_max)
+             if(Mstates>0.and.m_e>Mstates)then
+                if(MpiMaster)write(LOGfile,*)"renormalize_block WARNING: Mdmrg caps Edmrg right states from",m_e,"to",Mstates
+                m_e = Mstates
+             endif
+          elseif(Mstates>0)then
+             m_e   = min(Mstates,m_max)
           else
              stop "Mdmrg=Edmrg=0 can not fix a threshold for the RDM"
           endif
@@ -284,7 +295,7 @@ contains
           j_=m_e
           do i=j_+1,size(rho_right_evals)
              err = abs(e_-rho_right_evals(i))/e_
-             if(err<=deg_evals_threshold)m_e=m_e+1
+             if(err<=deg_evals_threshold.and.m_e<m_max)m_e=m_e+1
           enddo
           !>truncation-rotation matrices:
           truncation_error_right = 1d0 - sum(rho_right_evals(1:m_e))
@@ -399,5 +410,3 @@ contains
 
 
 END MODULE DMRG_RDM
-
-

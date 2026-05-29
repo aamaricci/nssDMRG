@@ -14,10 +14,10 @@ MODULE INPUT_VARS
   integer                      :: Ldmrg,iNlat,fNlat
   !# of iDMRG steps to take, Ldmrg=max length of the SB.
   integer                      :: Mdmrg
-  !# of states to retain at truncation. If 0 use Edmrg as threshold.  
+  !# of states to retain at truncation. If Edmrg>0 use as maximum retained states.
   real(8)                      :: Edmrg
   !Threshold energy used to evaluate the number of states to keep.
-  !If 0d0 use fixed Mdmrg.
+  !If Mdmrg>0 use Mdmrg as maximum retained states.
   real(8)                      :: QNtruncation_error
   !Threshold error for the Quantum Number truncation
   integer                      :: QNtruncation_dim
@@ -209,11 +209,11 @@ contains
 
     call parse_input_variable(Mdmrg,"Mdmrg",INPUTunit,&
          default=0,&
-         comment="Number of states for truncation. If 0 use Edmrg as threshold.")
+         comment="Number of states for truncation. If Edmrg>0 use as maximum retained states.")
 
     call parse_input_variable(Edmrg,"Edmrg",INPUTunit,&
          default=1d-8,&
-         comment="Threshold energy for truncation. If 0d0 use fixed Mdmrg.")
+         comment="Threshold energy for truncation. If Mdmrg>0 use Mdmrg as maximum retained states.")
 
     call parse_input_variable(Nsweep,"Nsweep",INPUTunit,default=1,&
          comment="Number of DMRG sweep to take for finite DMRG algorithm (min 1).")
