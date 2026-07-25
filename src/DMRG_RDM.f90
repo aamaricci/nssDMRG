@@ -20,6 +20,8 @@ contains
     integer                               :: Nleft,Nright,m_sb,Neig
     real(8),dimension(:),allocatable      :: sb_qn,qn
     integer,dimension(:),allocatable      :: sb_map
+    real(8)                               :: gs_weight,total_weight
+    integer                               :: itarget
 #ifdef _CMPLX
     complex(8),dimension(:,:),allocatable :: v_state
     complex(8),dimension(:,:),allocatable :: rho
@@ -54,24 +56,24 @@ contains
     !
     if(MpiMaster)then
        call start_timer("Get \rho")
-       do isb=1,size(sb_sector)
-          sb_qn   = sb_sector%qn(index=isb)
-          sb_map  = sb_sector%map(index=isb)
-          Nleft   = size(left%sectors(1)%map(qn=sb_qn))
-          Nright  = size(right%sectors(1)%map(qn=(current_target_qn - sb_qn)))
-          if(Nleft*Nright==0)cycle
-          !
-          !LEFT:
-          qn  = sb_qn
-          rho = build_density_matrix(Nleft,Nright,v_state(:,1),sb_map,'left')
-          call rho_left%append(rho,qn=qn,map=left%sectors(1)%map(qn=qn))
-          !
-          !RIGHT:
-          qn  = current_target_qn-sb_qn
-          rho = build_density_matrix(Nleft,Nright,v_state(:,1),sb_map,'right') 
-          call rho_right%append(rho,qn=qn,map=right%sectors(1)%map(qn=qn))
-          !
-       enddo
+       gs_weight = 1d0
+       if(allocated(dmrg_targets))gs_weight = gf_target_weight_gs
+       total_weight = gs_weight
+       if(allocated(dmrg_targets))then
+          do itarget=1,size(dmrg_targets)
+             total_weight = total_weight + dmrg_targets(itarget)%weight
+          enddo
+       endif
+       if(total_weight<=0d0)total_weight=1d0
+       !
+       call add_target_to_rdm(v_state(:,1),sb_sector,current_target_qn,gs_weight/total_weight)
+       if(allocated(dmrg_targets))then
+          do itarget=1,size(dmrg_targets)
+             call add_target_to_rdm(dmrg_targets(itarget)%vector,&
+                  dmrg_targets(itarget)%sb_sector,dmrg_targets(itarget)%qn,&
+                  dmrg_targets(itarget)%weight/total_weight)
+          enddo
+       endif
        call stop_timer("Get \rho")
     endif
     t_rdm_get=t_stop()
@@ -103,6 +105,68 @@ contains
     if(allocated(sb_qn))deallocate(sb_qn)
     if(allocated(qn))deallocate(qn)
   end subroutine sb_get_rdm
+
+
+  subroutine add_target_to_rdm(psi,target_sector,target_qn,weight)
+#ifdef _CMPLX
+    complex(8),dimension(:),intent(in) :: psi
+    complex(8),dimension(:,:),allocatable :: rho
+#else
+    real(8),dimension(:),intent(in)    :: psi
+    real(8),dimension(:,:),allocatable :: rho
+#endif
+    type(sectors_list),intent(in)      :: target_sector
+    real(8),dimension(:),intent(in)    :: target_qn
+    real(8),intent(in)                 :: weight
+    real(8),dimension(:),allocatable   :: sb_qn,qn
+    integer,dimension(:),allocatable   :: sb_map
+    integer                            :: isb,Nleft,Nright
+    !
+    if(weight<=0d0)return
+    do isb=1,size(target_sector)
+       sb_qn   = target_sector%qn(index=isb)
+       sb_map  = target_sector%map(index=isb)
+       Nleft   = size(left%sectors(1)%map(qn=sb_qn))
+       Nright  = size(right%sectors(1)%map(qn=(target_qn - sb_qn)))
+       if(Nleft*Nright==0)cycle
+       !
+       qn  = sb_qn
+       rho = weight*build_density_matrix(Nleft,Nright,psi,sb_map,'left')
+       call add_rho_block(rho_left,rho,qn,left%sectors(1)%map(qn=qn))
+       !
+       qn  = target_qn-sb_qn
+       rho = weight*build_density_matrix(Nleft,Nright,psi,sb_map,'right')
+       call add_rho_block(rho_right,rho,qn,right%sectors(1)%map(qn=qn))
+    enddo
+    if(allocated(rho))deallocate(rho)
+    if(allocated(sb_map))deallocate(sb_map)
+    if(allocated(sb_qn))deallocate(sb_qn)
+    if(allocated(qn))deallocate(qn)
+  end subroutine add_target_to_rdm
+
+
+  subroutine add_rho_block(rho_blocks,rho,qn,map)
+    type(blocks_matrix),intent(inout) :: rho_blocks
+#ifdef _CMPLX
+    complex(8),dimension(:,:),intent(in) :: rho
+    complex(8),dimension(:,:),allocatable :: old_rho
+#else
+    real(8),dimension(:,:),intent(in) :: rho
+    real(8),dimension(:,:),allocatable :: old_rho
+#endif
+    real(8),dimension(:),intent(in)   :: qn
+    integer,dimension(:),intent(in)   :: map
+    integer                           :: iqn
+    !
+    if(.not.rho_blocks%has_qn(qn))then
+       call rho_blocks%append(rho,qn=qn,map=map)
+    else
+       iqn = rho_blocks%index(qn)
+       old_rho = rho_blocks%block(index=iqn)
+       call rho_blocks%push(old_rho+rho,qn=qn,map=map)
+    endif
+    if(allocated(old_rho))deallocate(old_rho)
+  end subroutine add_rho_block
 
 
 

@@ -56,6 +56,19 @@ MODULE DMRG_GLOBAL
 
   type(sparse_matrix)                            :: spHsb
   !
+  type dmrg_target_state
+     character(len=64)                           :: label=""
+     real(8)                                     :: weight=0d0
+     real(8),dimension(:),allocatable            :: qn
+     integer,dimension(:),allocatable            :: sb_states
+     type(sectors_list)                          :: sb_sector
+#ifdef _CMPLX
+     complex(8),dimension(:),allocatable         :: vector
+#else
+     real(8),dimension(:),allocatable            :: vector
+#endif
+  end type dmrg_target_state
+  !
   real(8)                                        :: truncation_error_left,truncation_error_right
   character(len=:),allocatable                   :: suffix
   real(8),dimension(:),allocatable               :: target_Qn,current_target_QN
@@ -82,6 +95,7 @@ MODULE DMRG_GLOBAL
   !SUPERBLOCK SHARED THINGS
   integer,dimension(:),allocatable               :: sb_states
   type(sectors_list)                             :: sb_sector
+  type(dmrg_target_state),dimension(:),allocatable :: dmrg_targets
   !
   integer                                        :: Mstates
   real(8)                                        :: Estates
@@ -1012,5 +1026,4 @@ contains
 
 
 END MODULE DMRG_GLOBAL
-
 

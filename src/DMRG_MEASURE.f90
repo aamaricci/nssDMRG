@@ -16,6 +16,7 @@ module DMRG_MEASURE
   public :: Build_Op_DMRG
   public :: Advance_Op_DMRG
   public :: Advance_Corr_DMRG
+  public :: Apply_Op_DMRG
   public :: Average_Op_DMRG
   public :: Write_DMRG
 
@@ -720,6 +721,74 @@ contains
     deallocate(Olist)
     !
   end function Average_Op_dmrg
+
+
+  !##################################################################
+  !                   APPLY LOCAL OPERATOR TO A SB VECTOR
+  !Purpose: return O(i)|v> in the last-step SuperBlock basis.
+  !##################################################################
+  function Apply_Op_dmrg(Op,pos,v) result(Ov)
+    type(sparse_matrix),intent(in) :: Op
+    integer,intent(in)             :: pos
+#ifdef _CMPLX
+    complex(8),dimension(:),intent(in)   :: v
+    complex(8),dimension(:),allocatable  :: Ov
+#else
+    real(8),dimension(:),intent(in)      :: v
+    real(8),dimension(:),allocatable     :: Ov
+#endif
+    character(len=1)                :: label
+    type(sparse_matrix)             :: Oi
+    integer                         :: L,R,N
+    !
+#ifdef _DEBUG
+    if(MpiMaster)write(LOGfile,*)"DEBUG: Apply Op"
+#endif
+    !
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)then
+       allocate(Ov(size(v)))
+       Ov=zero
+       return
+    endif
+    !
+    L = left%length
+    R = right%length
+    N = L+R
+    if(pos<1.OR.pos>N)stop "Apply_Op_dmrg error: Pos not in [1,Ldmrg]"
+    label='l'; if(pos>L)label='r'
+    !
+    Oi = Build_Op_dmrg(Op,pos)
+    Oi = Advance_Op_dmrg(Oi,pos)
+    if(allocated(Olist))deallocate(Olist)
+    allocate(Olist(Nsb))
+    !
+    do isb=1,Nsb
+       select case(label)
+       case default;stop "Apply_Op_dmrg error: label not [l,r]"
+       case ("l");Olist(isb) = sp_filter(Oi,LI(isb)%states)
+       case ("r");Olist(isb) = sp_filter(Oi,RI(isb)%states)
+       end select
+    enddo
+    !
+    allocate(Ov(size(v)))
+#ifdef _MPI
+    if(MpiStatus)then
+       Ov = OdotV_MPI_direct(Olist,v,label)
+    else
+       Ov = OdotV_direct(Olist,v,label)
+    endif
+#else
+    Ov = OdotV_direct(Olist,v,label)
+#endif
+    !
+    do isb=1,Nsb
+       call Olist(isb)%free()
+    enddo
+    deallocate(Olist)
+    call Oi%free()
+    !
+  end function Apply_Op_dmrg
 
 
   !#################################

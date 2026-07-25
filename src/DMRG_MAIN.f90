@@ -3,6 +3,7 @@ MODULE DMRG_MAIN
   USE DMRG_CONNECT
   USE DMRG_SUPERBLOCK
   USE DMRG_RDM
+  USE DMRG_GF
   implicit none
   private
 
@@ -114,6 +115,7 @@ contains
     call right%free()
     call psi_left%free()
     call psi_right%free()
+    call Clear_GF_Targets_DMRG()
     !
     call sb_sector%free()
     if(allocated(gs_vector))deallocate(gs_vector)
@@ -396,6 +398,7 @@ contains
       call sb_save_measure_state()
       if(MpiMaster)call sb_save_measure_blocks()
     endif
+    call Build_GF_Targets_DMRG(type)
     !
     !
     if(MpiMaster)then

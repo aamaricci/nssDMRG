@@ -104,6 +104,20 @@ MODULE INPUT_VARS
   ! logical                      :: lanc_v0_dble
   ! !Set the initial vector used in Arpack to be identical to 1d0/N. This is an experimental feature
   ! !used to enforce: i) the same starting point, ii) Hermiticity breaking in CMPLX code
+  logical                      :: gf_target
+  !flag to target dynamical Green's function excitation vectors during fDMRG
+  character(len=64)            :: gf_target_op
+  !local operator key used as O in O_k=sum_j f_k(j) O_j
+  integer                      :: gf_target_nmodes
+  !number of OBC sine quasi-momentum modes to target
+  integer,allocatable          :: gf_target_modes(:)
+  !OBC sine mode indices n, k_n=pi*n/(L+1)
+  real(8)                      :: gf_target_weight_gs
+  !RDM weight for the ground state
+  real(8)                      :: gf_target_weight_particle
+  !RDM weight for O_k^dag|Psi0>
+  real(8)                      :: gf_target_weight_hole
+  !RDM weight for O_k|Psi0>
   logical                      :: save_umat
   !flag to save Rotation matrices, default=T
   logical                      :: save_measure_state
@@ -305,12 +319,31 @@ contains
          comment="Set the size of the Arpack block (Ncv=lanc_ncv_factor*Neigen+lanc_ncv_add)")
     call parse_input_variable(lanc_niter,"LANC_NITER",INPUTunit,default=512,&
          comment="Number of Lanczos iteration in spectrum determination.")
-    ! call parse_input_variable(lanc_ngfiter,"LANC_NGFITER",INPUTunit,default=200,&
-    !      comment="Number of Lanczos iteration in GF determination. Number of momenta.")
+    call parse_input_variable(lanc_ngfiter,"LANC_NGFITER",INPUTunit,default=200,&
+         comment="Number of Lanczos iterations in dynamical Green's function continued fractions.")
     call parse_input_variable(lanc_tolerance,"LANC_TOLERANCE",INPUTunit,default=1d-12,&
          comment="Tolerance for the Lanczos iterations as used in Arpack and plain lanczos.")
     call parse_input_variable(lanc_dim_threshold,"LANC_DIM_THRESHOLD",INPUTunit,&
          default=1024,comment="Dimension threshold for Lapack use.")
+    !
+    !> Dynamical GF targeting parameters:
+    call parse_input_variable(gf_target,"GF_TARGET",INPUTunit,default=.false.,&
+         comment="Target OBC sine-mode Green's function excitation vectors during fDMRG.")
+    call parse_input_variable(gf_target_op,"GF_TARGET_OP",INPUTunit,default="C_l1_s1",&
+         comment="Local operator key O used for GF targeting; particle uses O^dag, hole uses O.")
+    call parse_input_variable(gf_target_nmodes,"GF_TARGET_NMODES",INPUTunit,default=0,&
+         comment="Number of OBC sine quasi-momentum modes targeted for GF.")
+    if(allocated(gf_target_modes))deallocate(gf_target_modes)
+    allocate(gf_target_modes(max(1,gf_target_nmodes)))
+    call parse_input_variable(gf_target_modes,"GF_TARGET_MODES",INPUTunit,&
+         default=(/(i,i=1,size(gf_target_modes))/),&
+         comment="OBC sine mode indices n with k_n=pi*n/(L+1).")
+    call parse_input_variable(gf_target_weight_gs,"GF_TARGET_WEIGHT_GS",INPUTunit,default=0.5d0,&
+         comment="RDM weight for |Psi0> when GF_TARGET=T.")
+    call parse_input_variable(gf_target_weight_particle,"GF_TARGET_WEIGHT_PARTICLE",INPUTunit,default=0.25d0,&
+         comment="RDM weight for O_k^dag|Psi0> when GF_TARGET=T.")
+    call parse_input_variable(gf_target_weight_hole,"GF_TARGET_WEIGHT_HOLE",INPUTunit,default=0.25d0,&
+         comment="RDM weight for O_k|Psi0> when GF_TARGET=T.")
     !
     !>Save Blocks:
     call parse_input_variable(save_block,"SAVE_BLOCK",INPUTunit,default=.true.,&

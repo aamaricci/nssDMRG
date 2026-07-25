@@ -15,6 +15,7 @@ MODULE DMRG
   USE DMRG_SUPERBLOCK
   USE DMRG_MAIN
   USE DMRG_MEASURE
+  USE DMRG_GF
   !
   !< uncomment this to compile tests
 #if (defined _DEBUG) || (defined _TESTING)
