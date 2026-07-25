@@ -25,6 +25,7 @@ INCLUDE(${CMAKE_MODULE_PATH}/ColorsMsg.cmake)
 # Set some options the user may choose
 OPTION(USE_MPI "Set MPI pre-compilation flag" ON)
 OPTION(PROFILE "Set Code Profiling" ON)
+OPTION(API_EXPORT "Export full interface" OFF)
 OPTION(VERBOSE "Build a verbose Makefile" OFF)
 OPTION(WITH_BLAS_LAPACK "Use internal Blas/Lapack" OFF)
 IF(VERBOSE)
@@ -33,7 +34,9 @@ ELSE(VERBOSE)
   SET(CMAKE_VERBOSE_MAKEFILE OFF)
 ENDIF(VERBOSE)
 
-
+MESSAGE(STATUS "USE_MPI=${USE_MPI}")
+MESSAGE(STATUS "PROFILE=${PROFILE}")
+MESSAGE(STATUS "API_EXPORT=${API_EXPORT}")
 
 ############################################################
 # Look for MPI if needed

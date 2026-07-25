@@ -16,8 +16,7 @@ MODULE DMRG
   USE DMRG_MAIN
   USE DMRG_MEASURE
   !
-  !< uncomment this to compile tests
-#if (defined _DEBUG) || (defined _TESTING)
+#ifdef _API_EXPORT
   USE DMRG_GLOBAL
   USE DMRG_SUPERBLOCK_SETUP
   USE DMRG_CONNECT
