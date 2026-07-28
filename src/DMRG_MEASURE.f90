@@ -350,7 +350,7 @@ contains
   !##################################################################
   function Build_Op_dmrg(Op,pos,set_basis) result(Oi)
     type(sparse_matrix),intent(in) :: Op
-    integer                        :: pos
+    integer                        :: pos,pos_aux
     type(sparse_matrix)            :: Oi
     logical,optional               :: set_basis   
     !
@@ -381,7 +381,10 @@ contains
     !i = M(pos)
     !recall that M: OBC: 1+2+...Ldmrg-2+Ldmrg-1+Ldmrg
     !               PBC: Ldmrg+Ldmrg-2..+1+..+Ldmrg-1
-    i=b2gMap(pos)    ; if(pos>L)i=b2gMap(N+1-pos)
+    !i=b2gMap(pos)    ; if(pos>L)i=b2gMap(N+1-pos)
+    pos_aux=pos
+    IF(pos>L)pos_aux=N+1-pos
+    i=b2gMap(pos_aux)
     !
     !Build Operator on the chain at position pos:   
     if(i==1)then
@@ -473,7 +476,7 @@ contains
   !##################################################################
   function Advance_Op_dmrg(Op,pos,nstep) result(Oi)
     type(sparse_matrix),intent(in)   :: Op
-    integer                          :: pos
+    integer                          :: pos,pos_aux
     integer,optional                 :: nstep
     type(sparse_matrix)              :: Oi,U
     character(len=1)                 :: label
@@ -496,7 +499,10 @@ contains
     label='l'; if(pos>L)label='r'
     !
     !Get index in the block from the position pos in the chain:
-    i=b2gMap(pos)    ; if(pos>L)i=b2gMap(N+1-pos)
+    !i=b2gMap(pos)    ; if(pos>L)i=b2gMap(N+1-pos)
+    pos_aux=pos
+    IF(pos>L)pos_aux=N+1-pos
+    i=b2gMap(pos_aux)
     !
     istart  = i
     select case(label)
