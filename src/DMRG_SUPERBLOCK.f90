@@ -2,7 +2,8 @@ MODULE DMRG_SUPERBLOCK
   USE DMRG_GLOBAL
   USE DMRG_CONNECT
   USE DMRG_SUPERBLOCK_SETUP
-  USE MPI
+  USE DMRG_SUPERBLOCK_HXV
+
   implicit none
   private
 
@@ -577,73 +578,10 @@ contains
 
 
   subroutine sb_delete_Hv()
-    integer :: i,j
-    !
     spHtimesV_p => null()
-    !
     call spHsb%free()
-    if(allocated(Hleft))then
-       do concurrent(i=1:size(Hleft))
-          call Hleft(i)%free()
-       enddo
-       deallocate(Hleft)
-    endif
-    if(allocated(Hright))then
-       do concurrent(i=1:size(Hright))
-          call Hright(i)%free()
-       enddo
-       deallocate(Hright)
-    endif
-    if(allocated(A))then
-       do concurrent(i=1:size(A,1),j=1:size(A,2))
-          call A(i,j)%free()
-       enddo
-       deallocate(A)
-    endif
-    if(allocated(B))then
-       do concurrent(i=1:size(B,1),j=1:size(B,2))
-          call B(i,j)%free()
-       enddo
-       deallocate(B)
-    endif
-    if(allocated(SBleft_states))deallocate(SBleft_states)
-    if(allocated(SBright_states))deallocate(SBright_states)
-    if(allocated(SBleft_maps))deallocate(SBleft_maps)
-    if(allocated(SBright_maps))deallocate(SBright_maps)
-    call Lazy_Hl%free()
-    call Lazy_Hr%free()
-    if(allocated(Lazy_Sl_n))then
-       do concurrent(i=1:Nspin)
-          call Lazy_Sl_n(i)%free()
-          call Lazy_Sr_n(i)%free()
-          if(PBCdmrg)then
-             call Lazy_Sl_p(i)%free()
-             call Lazy_Sr_p(i)%free()
-          endif
-       enddo
-       deallocate(Lazy_Sl_n,Lazy_Sr_n)
-       if(PBCdmrg)deallocate(Lazy_Sl_p,Lazy_Sr_p)
-    endif
-    if(allocated(Lazy_CdgP_n))then
-       do concurrent(i=1:Nspin*Norb)
-          call Lazy_CdgP_n(i)%free()
-          call Lazy_Cr_n(i)%free()
-          if(PBCdmrg)then
-             call Lazy_CdgP_p(i)%free()
-             call Lazy_Cr_p(i)%free()
-          endif
-       enddo
-       deallocate(Lazy_CdgP_n,Lazy_Cr_n)
-       if(PBCdmrg)deallocate(Lazy_CdgP_p,Lazy_Cr_p)
-    endif
-    !
+    call free_superblock_setup_state()
     call sb_delete_dims()
-    !
-    if(allocated(isb2jsb))deallocate(isb2jsb)
-    if(allocated(IsHconjg))deallocate(IsHconjg)
-    if(allocated(RowOffset))deallocate(RowOffset)
-    if(allocated(ColOffset))deallocate(ColOffset)
-    !
   end subroutine sb_delete_Hv
 
 
@@ -928,8 +866,6 @@ contains
 
 
 END MODULE DMRG_SUPERBLOCK
-
-
 
 
 

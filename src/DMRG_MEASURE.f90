@@ -3,7 +3,6 @@ module DMRG_MEASURE
   USE DMRG_GLOBAL
   USE DMRG_CONNECT
   USE DMRG_SUPERBLOCK
-  USE DMRG_SUPERBLOCK_SETUP
   implicit none
   private
 
@@ -168,8 +167,8 @@ contains
         Iright = id(right%Dim)
         call left%omatrices%free()
         call right%omatrices%free()
-        call left%put_omat("1",Ileft,"")
-        call right%put_omat("1",Iright,"")
+        call left%put_omat("1",Ileft)
+        call right%put_omat("1",Iright)
         call Ileft%free()
         call Iright%free()
       endif

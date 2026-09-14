@@ -7,6 +7,7 @@ MODULE BLOCKS
   USE MATRIX_SPARSE
   USE TUPLE_BASIS
   USE LIST_OPERATORS
+  USE LIST_OMATRICES
   USE LIST_SECTORS
   USE SITES
   implicit none
@@ -18,13 +19,13 @@ MODULE BLOCKS
      integer                                     :: Dim=1
      type(sectors_list),dimension(:),allocatable :: sectors
      type(operators_list)                        :: operators
-     type(operators_list)                        :: omatrices
+     type(omatrices_list)                        :: omatrices
      character(len=:),allocatable                :: Opname
      character(len=:),allocatable                :: SiteType
-     ! character(len=:),allocatable                :: BlockTag
    contains
      procedure,pass :: free        => free_block
      procedure,pass :: put_op      => put_op_block
+     procedure,pass :: update_op   => update_op_block
      procedure,pass :: get_basis   => get_basis_block
      procedure,pass :: set_basis   => set_basis_block
      procedure,pass :: show        => show_block
@@ -33,7 +34,6 @@ MODULE BLOCKS
      procedure,pass :: okey        => okey_block
      procedure,pass :: name        => Opname_block
      procedure,pass :: type        => SiteType_block
-     ! procedure,pass :: tag         => tag_block
      procedure,pass :: write       => write_block
      procedure,pass :: save        => save_block
      procedure,pass :: read        => read_block
@@ -92,7 +92,6 @@ contains
        call self%sectors%free()
        deallocate(self%sectors)
     endif
-    ! if(allocated(self%BlockTag))deallocate(self%BlockTag)
     if(allocated(self%Opname))deallocate(self%Opname)
     if(allocated(self%SiteType))deallocate(self%SiteType)
   end subroutine free_block
@@ -107,13 +106,10 @@ contains
     integer,intent(in)                       :: Dim
     type(sectors_list),intent(in)            :: sectors(:)
     type(operators_list),intent(in)          :: operators
-    type(operators_list),intent(in)          :: omatrices
+    type(omatrices_list),intent(in)          :: omatrices
     character(len=:),allocatable             :: OpName
     character(len=:),allocatable             :: SiteType
-    ! character(len=:),allocatable,optional    :: BlockTag
-    ! character(len=:),allocatable             :: BlockTag_
     type(block)                              :: self
-    ! BlockTag_      ="";if(present(BlockTag))BlockTag_=BlockTag
     self%length    = length
     self%Dim       = Dim
     self%operators = operators
@@ -122,7 +118,6 @@ contains
     do i=1,size(self%sectors)
        self%sectors(i) = sectors(i)
     enddo
-    ! allocate(self%BlockTag, source=BlockTag_)
     allocate(self%OpName, source=OpName)
     allocate(self%SiteType, source=SiteType)
   end function constructor_from_scrath
@@ -130,10 +125,7 @@ contains
 
   function constructor_from_site(ssite) result(self)
     type(site),intent(in)                :: ssite
-    ! character(len=*),intent(in),optional :: BlockTag
-    ! character(len=:),allocatable         :: BlockTag_
     type(block)                          :: self
-    ! BlockTag_="";if(present(BlockTag))BlockTag_=BlockTag
     self%length    = 1
     self%Dim       = ssite%Dim
     self%operators = ssite%operators
@@ -162,13 +154,26 @@ contains
   !+------------------------------------------------------------------+
   !PURPOSE:  Load a sparse operator in the block dictionary
   !+------------------------------------------------------------------+
-  subroutine put_op_block(self,key,op,type)
-    class(block)                   :: self
+  subroutine put_op_block(self,key,op,type,dq)
+    class(block)                             :: self
+    character(len=*),intent(in)              :: key
+    type(sparse_matrix),intent(in)           :: op
+    character(len=*),intent(in)              :: type
+    real(8),dimension(:),intent(in)          :: dq
+    call self%operators%put(str(key),op,type,dq=dq)
+  end subroutine put_op_block
+
+
+
+  !+------------------------------------------------------------------+
+  !PURPOSE: Update an existing block operator without changing metadata
+  !+------------------------------------------------------------------+
+  subroutine update_op_block(self,key,op)
+    class(block),intent(inout)     :: self
     character(len=*),intent(in)    :: key
     type(sparse_matrix),intent(in) :: op
-    character(len=*),intent(in)    :: type
-    call self%operators%put(str(key),op,type)
-  end subroutine put_op_block
+    call self%operators%update(str(key),op)
+  end subroutine update_op_block
 
 
 
@@ -212,16 +217,15 @@ contains
     type(sparse_matrix)              :: Urho
     integer                          :: i,N,M  !N=self%dim,M=truncated dimension
     type(sparse_matrix)              :: Op
-    character(len=:),allocatable     :: key,type
+    character(len=:),allocatable     :: key
     !
     N = Urho%Nrow
     M = Urho%Ncol
     if(N/=self%dim) stop "self.renormalize error: size(Umat,1) != self.dim"
     do i=1,size(self%operators)
-       key  = self%operators%key(index=i)
-       type = self%operators%type(index=i)
-       Op   = self%operators%op(index=i)
-       call self%put_op(str(key),rotate_and_truncate(Op), type)
+       key    = self%operators%key(index=i)
+       Op     = self%operators%op(index=i)
+       call self%update_op(str(key),rotate_and_truncate(Op))
     enddo
     self%dim = M
     !
@@ -230,6 +234,7 @@ contains
   contains
     !
     !Udgr.O.U: [M,N].[N,N].[N,M]=[M,M]
+    !We assume implicitly that Urho conserves Symmetry Sectors and QN...
     function rotate_and_truncate(Op) result(RotOp)
       type(sparse_matrix),intent(in) :: Op
       type(sparse_matrix)            :: RotOp
@@ -240,6 +245,8 @@ contains
     !
   end subroutine rotate_operators_block
   !
+
+
 
 
 
@@ -279,6 +286,7 @@ contains
     nobasis_=.false.;if(present(nobasis))nobasis_=nobasis
     !
     bool = self%operators%is_valid(self%Dim)
+    bool = bool.AND.self%operators%has_valid_dq()
     !
     if(nobasis_)return
     do i=1,size(self%sectors)
@@ -377,7 +385,7 @@ contains
     integer                   :: Bunit,Uunit
     logical                   :: include_omatrices_
     character(len=:),allocatable :: prefix
-    type(operators_list)      :: omatrices
+    type(omatrices_list)      :: omatrices
     type(sparse_matrix)       :: eye_op
     include_omatrices_=.false.;if(present(include_omatrices))include_omatrices_=include_omatrices
     prefix=str(block_file);if(present(file_prefix))prefix=str(file_prefix)
@@ -410,7 +418,7 @@ contains
        !This is an initialization
        if(self%omatrices%has_key("1"))then
           eye_op = self%omatrices%op(key="1")
-          call omatrices%put("1",eye_op,"")
+          call omatrices%put("1",eye_op)
           call eye_op%free()
        endif
        call omatrices%write(unit=Bunit)
@@ -458,7 +466,7 @@ contains
     integer                        :: Dim
     type(sectors_list),allocatable :: sectors(:)
     type(operators_list)           :: operators
-    type(operators_list)           :: omatrices
+    type(omatrices_list)           :: omatrices
     type(sparse_matrix)            :: umat
     character(len=32)              :: OpName,key,type,tag
     character(len=32)              :: SiteType
@@ -560,112 +568,103 @@ contains
   !              INPUT / OUTPUT O-MATRICES (PUT/READ/WRITE)
   !##################################################################
   !##################################################################
-  subroutine put_omat_block(self,key,op,type)
+  subroutine put_omat_block(self,key,op)
     class(block)                   :: self
     character(len=*),intent(in)    :: key
     type(sparse_matrix),intent(in) :: op
-    character(len=*),intent(in)    :: type
-    call self%omatrices%put(str(key),op,type)
+    call self%omatrices%put(str(key),op)
   end subroutine put_omat_block
 
 
 
 
-subroutine write_omat_block(self,key,op,type,suffix,append)
-  class(block)                   :: self
-  character(len=*),intent(in)    :: key
-  type(sparse_matrix),intent(in) :: op
-  character(len=*),intent(in)    :: type
-  character(len=*),intent(in)    :: suffix
-  logical,optional               :: append
-  integer :: unit
-  logical :: append_
-  append_=.true.;if(present(append))append_=append
-  call write_umat_split_script()
-  call inherit_restart_umat_file(str(suffix),append_)
-  unit = fopen(str(umat_file)//str(suffix),append=append_)
-  write(unit,*)str(key)
-  if(str(type)=="")then
-    write(unit,*)"none"
-  else
-    write(unit,*)str(type)
-  endif
-  call op%write(unit=unit)
-  close(unit)
-  contains
-  subroutine write_umat_split_script()
-    integer :: unit
-    open(free_unit(unit),file=str(restart_output_dir)//"split_umat.sh")
-    write(unit,'(A)')"#!/usr/bin/env bash"
-    write(unit,'(A)')"set -euo pipefail"
-    write(unit,'(A)')"dir=""$(cd ""$(dirname ""$0"")"" && pwd)"""
-    write(unit,'(A)')"split_side() {"
-    write(unit,'(A)')"  side=""$1"""
-    write(unit,'(A)')"  input=""$dir/umat_${side}.restart"""
-    write(unit,'(A)')"  [[ -f ""$input"" ]] || return 0"
-    write(unit,'(A)')"  awk -v side=""$side"" -v dir=""$dir"" '"
-    write(unit,'(A)')"  function trim(s){gsub(/^[[:space:]]+|[[:space:]]+$/, """", s); return s}"
-    write(unit,'(A)')"  {"
-    write(unit,'(A)')"    key=trim($0); if(key=="""") next"
-    write(unit,'(A)')"    if((getline type)<=0) exit; type=trim(type)"
-    write(unit,'(A)')"    if((getline dims)<=0) exit; split(trim(dims), d, /[[:space:]]+/); nrow=d[1]"
-    write(unit,'(A)')"    out=dir ""/umat_L"" key ""_"" side "".restart"""
-    write(unit,'(A)')"    print key > out; print type >> out; print dims >> out"
-    write(unit,'(A)')"    for(i=1;i<=nrow;i++){"
-    write(unit,'(A)')"      if((getline line)<=0) exit; print line >> out"
-    write(unit,'(A)')"      split(trim(line), r, /[[:space:]]+/); n=r[1]"
-    write(unit,'(A)')"      for(j=1;j<=n;j++){ if((getline line)<=0) exit; print line >> out }"
-    write(unit,'(A)')"    }"
-    write(unit,'(A)')"  }' ""$input"""
-    write(unit,'(A)')"}"
-    write(unit,'(A)')"split_side left"
-    write(unit,'(A)')"split_side right"
-    close(unit)
-    call execute_command_line("chmod +x "//str(restart_output_dir)//"split_umat.sh")
-  end subroutine write_umat_split_script
-
-  subroutine inherit_restart_umat_file(suffix,append)
-    character(len=*),intent(in) :: suffix
-    logical,intent(in)         :: append
-    character(len=:),allocatable :: input_file,output_file
-    character(len=4096)          :: line
-    integer                      :: in_unit,out_unit,io
-    logical                      :: input_exists,output_exists
-    !
-    if(.not.append)return
-    input_file  = str(umat_restart_file)//str(suffix)
-    output_file = str(umat_file)//str(suffix)
-    inquire(file=str(output_file),exist=output_exists)
-    if(output_exists)return
-    inquire(file=str(input_file),exist=input_exists)
-    if(.not.input_exists)return
-    !
-    open(free_unit(in_unit),file=str(input_file),status="old",action="read")
-    open(free_unit(out_unit),file=str(output_file),status="replace",action="write")
-    do
-       read(in_unit,'(A)',iostat=io)line
-       if(io/=0)exit
-       write(out_unit,'(A)')trim(line)
-    enddo
-    close(in_unit)
-    close(out_unit)
-  end subroutine inherit_restart_umat_file
-end subroutine write_omat_block
-
-
-
-  subroutine save_omat_block(self,key,op,type,suffix,append,gzip)
+  subroutine write_omat_block(self,key,op,suffix,append)
     class(block)                   :: self
     character(len=*),intent(in)    :: key
     type(sparse_matrix),intent(in) :: op
-    character(len=*),intent(in)    :: type
+    character(len=*),intent(in)    :: suffix
+    logical,optional               :: append
+    integer :: unit
+    logical :: append_
+    append_=.true.;if(present(append))append_=append
+    call write_umat_split_script()
+    call inherit_restart_umat_file(str(suffix),append_)
+    unit = fopen(str(umat_file)//str(suffix),append=append_)
+    write(unit,*)str(key)
+    call op%write(unit=unit)
+    close(unit)
+    contains
+    subroutine write_umat_split_script()
+      integer :: unit
+      open(free_unit(unit),file=str(restart_output_dir)//"split_umat.sh")
+      write(unit,'(A)')"#!/usr/bin/env bash"
+      write(unit,'(A)')"set -euo pipefail"
+      write(unit,'(A)')"dir=""$(cd ""$(dirname ""$0"")"" && pwd)"""
+      write(unit,'(A)')"split_side() {"
+      write(unit,'(A)')"  side=""$1"""
+      write(unit,'(A)')"  input=""$dir/umat_${side}.restart"""
+      write(unit,'(A)')"  [[ -f ""$input"" ]] || return 0"
+      write(unit,'(A)')"  awk -v side=""$side"" -v dir=""$dir"" '"
+      write(unit,'(A)')"  function trim(s){gsub(/^[[:space:]]+|[[:space:]]+$/, """", s); return s}"
+      write(unit,'(A)')"  {"
+      write(unit,'(A)')"    key=trim($0); if(key=="""") next"
+      write(unit,'(A)')"    if((getline dims)<=0) exit; split(trim(dims), d, /[[:space:]]+/); nrow=d[1]"
+      write(unit,'(A)')"    out=dir ""/umat_L"" key ""_"" side "".restart"""
+      write(unit,'(A)')"    print key > out; print dims >> out"
+      write(unit,'(A)')"    for(i=1;i<=nrow;i++){"
+      write(unit,'(A)')"      if((getline line)<=0) exit; print line >> out"
+      write(unit,'(A)')"      split(trim(line), r, /[[:space:]]+/); n=r[1]"
+      write(unit,'(A)')"      for(j=1;j<=n;j++){ if((getline line)<=0) exit; print line >> out }"
+      write(unit,'(A)')"    }"
+      write(unit,'(A)')"  }' ""$input"""
+      write(unit,'(A)')"}"
+      write(unit,'(A)')"split_side left"
+      write(unit,'(A)')"split_side right"
+      close(unit)
+      call execute_command_line("chmod +x "//str(restart_output_dir)//"split_umat.sh")
+    end subroutine write_umat_split_script
+
+    subroutine inherit_restart_umat_file(suffix,append)
+      character(len=*),intent(in) :: suffix
+      logical,intent(in)         :: append
+      character(len=:),allocatable :: input_file,output_file
+      character(len=4096)          :: line
+      integer                      :: in_unit,out_unit,io
+      logical                      :: input_exists,output_exists
+      !
+      if(.not.append)return
+      input_file  = str(umat_restart_file)//str(suffix)
+      output_file = str(umat_file)//str(suffix)
+      inquire(file=str(output_file),exist=output_exists)
+      if(output_exists)return
+      inquire(file=str(input_file),exist=input_exists)
+      if(.not.input_exists)return
+      !
+      open(free_unit(in_unit),file=str(input_file),status="old",action="read")
+      open(free_unit(out_unit),file=str(output_file),status="replace",action="write")
+      do
+        read(in_unit,'(A)',iostat=io)line
+        if(io/=0)exit
+        write(out_unit,'(A)')trim(line)
+      enddo
+      close(in_unit)
+      close(out_unit)
+    end subroutine inherit_restart_umat_file
+  end subroutine write_omat_block
+
+
+
+  subroutine save_omat_block(self,key,op,suffix,append,gzip)
+    class(block)                   :: self
+    character(len=*),intent(in)    :: key
+    type(sparse_matrix),intent(in) :: op
     character(len=*),intent(in)    :: suffix
     logical,optional               :: gzip,append
     integer                        :: unit
     logical                        :: gzip_,append_
     gzip_  =.false.;if(present(gzip))  gzip_ =gzip
     append_=.true.;if(present(append))append_=append
-    call self%write_omat(key,op,type,str(suffix),append=append_)
+    call self%write_omat(key,op,str(suffix),append=append_)
     if(gzip_)then
        call file_gzip(str(umat_file)//str(suffix))
     endif
@@ -683,12 +682,12 @@ end subroutine write_omat_block
 
 
   subroutine read_umat_files(omatrices,suffix,length)
-    type(operators_list)           :: omatrices
+    type(omatrices_list)           :: omatrices
     character(len=*)               :: suffix
     integer                        :: length
     integer                        :: il,Uunit
     type(sparse_matrix)            :: umat
-    character(len=32)              :: key,type
+    character(len=32)              :: key
     character(len=:),allocatable   :: file_suffix
     logical                        :: fbool
     logical                        :: loaded
@@ -715,9 +714,8 @@ end subroutine write_omat_block
          do
             read(Uunit,*,iostat=iostat)key
             if(iostat/=0)exit
-            read(Uunit,*)type
             call umat%read(unit=Uunit)
-            call omatrices%put(str(key),umat,str(type))
+            call omatrices%put(str(key),umat)
          enddo
          call umat%free()
          close(Uunit)
@@ -733,9 +731,8 @@ end subroutine write_omat_block
          if(.not.fbool)cycle
          open(free_unit(Uunit),file=str(prefix)//str(file_suffix))
          read(Uunit,*)key
-         read(Uunit,*)type
          call umat%read(unit=Uunit)
-         call omatrices%put(str(key),umat,str(type))
+         call omatrices%put(str(key),umat)
          call umat%free()
          close(Uunit)
          loaded=.true.
@@ -790,6 +787,7 @@ program testBLOCKS
   USE SCIFOR
   USE MATRIX_SPARSE
   USE LIST_OPERATORS
+  USE LIST_OMATRICES
   USE TUPLE_BASIS
   USE LIST_SECTORS
   USE SITES
@@ -799,8 +797,12 @@ program testBLOCKS
   type(block)                         :: my_block,a
   type(block),allocatable             :: my_blocks(:)
   type(operators_list)                :: op
+  type(omatrices_list)                :: omats
   type(sectors_list)                  :: sect
   type(tbasis)                        :: sz_basis
+  type(sparse_matrix)                 :: Urho
+  real(8),dimension(1,3)              :: spin_dqs
+  character(len=:),allocatable        :: op_key
   integer                             :: i
 #ifdef _CMPLX
   complex(8),dimension(2,2),parameter :: Hzero=reshape([zero,zero,zero,zero],[2,2])
@@ -820,19 +822,35 @@ program testBLOCKS
 
   Gamma13=kron(Sx,Sz)
   Gamma03=kron(S0,Sz)
+  spin_dqs(:,1)=[0d0]
+  spin_dqs(:,2)=[0d0]
+  spin_dqs(:,3)=[1d0]
+
+  call read_input("DMRG.conf")
 
 
   sz_basis = tbasis([0.5d0,-0.5d0],Qdim=1)
 
   print*,"TEST Constructor 1: from_scratch"
+  call omats%put("1",sparse(S0))
   my_block=block(&
        length=1, &       
        dim=2,&
        sectors=[sectors_list(sz_basis)],&
        operators=operators_list(['H0','Sz','Sp'],&
-       [sparse(Hzero),sparse(Sz),sparse(Splus)],['b','s','b']),&
+       [sparse(Hzero),sparse(Sz),sparse(Splus)],['b','s','b'],&
+       dqs=spin_dqs),&
+       omatrices=omats,&
        opname='S',&
        sitetype='spin')
+  call assert_true(my_block%operators%has_valid_dq(qdim=1),&
+       "block from scratch: complete dq metadata")
+  call assert_dq(my_block%operators%dq(key="H0"),[0d0],&
+       "block from scratch: H0 dq")
+  call assert_dq(my_block%operators%dq(key="Sp"),[1d0],&
+       "block from scratch: Sp dq")
+  call assert_true(my_block%omatrices%is_valid(),"block from scratch: valid omatrices")
+  call omats%free()
 
   print*,"Showing the operator list:"
   call my_block%show()
@@ -853,6 +871,14 @@ program testBLOCKS
 
   print*,"TEST Constructor 2: from_site"
   my_block=block(spin_site(2))
+  call assert_true(my_block%operators%has_valid_dq(qdim=1),&
+       "block from site: complete dq metadata")
+  call assert_dq(my_block%operators%dq(key="H"),[0d0],&
+       "block from site: H dq")
+  op_key=my_block%name()//my_block%okey(0,2,ilink="n")
+  call assert_dq(my_block%operators%dq(key=op_key),[1d0],&
+       "block from site: Sp dq")
+  call assert_true(my_block%omatrices%is_valid(),"block from site: valid omatrices")
   print*,"Showing the operator list:"
   call my_block%show()
   print*,""
@@ -863,6 +889,22 @@ program testBLOCKS
 
   print*,"Test equality; a.show()"
   a = my_block
+  call assert_dq(a%operators%dq(key=op_key),[1d0],&
+       "block assignment preserves dq")
+
+  call a%put_op("X",sparse(Sx),"bosonic",dq=[0d0])
+  call assert_dq(a%operators%dq(key="X"),[0d0],&
+       "block put_op forwards dq")
+
+  Urho=sparse(S0)
+  call a%renormalize(Urho)
+  call assert_true(a%operators%has_valid_dq(qdim=1),&
+       "block renormalize preserves complete dq metadata")
+  call assert_dq(a%operators%dq(key=op_key),[1d0],&
+       "block renormalize preserves Sp dq")
+  call assert_dq(a%operators%dq(key="X"),[0d0],&
+       "block renormalize preserves X dq")
+  call Urho%free()
 
 
 
@@ -933,6 +975,12 @@ program testBLOCKS
 
   print*,"Read"
   call a%read(suffix="_a.dat")
+  call assert_true(a%operators%has_valid_dq(qdim=1),&
+       "block write/read preserves complete dq metadata")
+  op_key=a%name()//a%okey(0,2,ilink="n")
+  call assert_dq(a%operators%dq(key=op_key),[1d0],&
+       "block write/read preserves Sp dq")
+  call assert_true(a%omatrices%is_valid(),"block write/read preserves valid omatrices")
   print*,"Show"
   call a%show(wOP=.true.,wOMAT=.true.)
 
@@ -950,10 +998,36 @@ program testBLOCKS
 
   print*,"Load from file"
   call a%load(suffix='_b.dat')
+  call assert_true(a%operators%has_valid_dq(qdim=1),&
+       "block save/load preserves complete dq metadata")
+  op_key=a%name()//a%okey(0,2,ilink="n")
+  call assert_dq(a%operators%dq(key=op_key),[1d0],&
+       "block save/load preserves Sp dq")
+  call assert_true(a%omatrices%is_valid(),"block save/load preserves valid omatrices")
   print*,"show:"
   call a%show()
 
+  print*,"BLOCK DQ TESTS: PASS"
+
 contains
+
+
+  subroutine assert_true(condition,message)
+    logical,intent(in)          :: condition
+    character(len=*),intent(in) :: message
+    if(.not.condition)then
+       write(*,"(A)")"FAILED: "//trim(message)
+       error stop 1
+    endif
+  end subroutine assert_true
+
+
+  subroutine assert_dq(actual,expected,message)
+    real(8),dimension(:),intent(in) :: actual,expected
+    character(len=*),intent(in)     :: message
+    call assert_true(size(actual)==size(expected),trim(message)//": size")
+    call assert_true(all(abs(actual-expected)<1d-12),trim(message)//": value")
+  end subroutine assert_dq
 
 
   subroutine i_random(A)

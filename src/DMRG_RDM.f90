@@ -108,6 +108,10 @@ contains
 
 
 
+
+
+
+
   !##################################################################
   !              BUILD REDUCED DENSITY MATRIX 
   !##################################################################
@@ -226,8 +230,8 @@ contains
           truncation_error_left  = 1d0 - sum(rho_left_evals(1:m_s))
           trRho_left             = rho_left%sparse(m_left,m_s)
           !>Store all the rotation/truncation matrices:
-          if(block_umat_cache)call left%put_omat(str(left%length),trRho_left,'')
-          if(save_umat)call left%save_omat(str(left%length),trRho_left,'',&
+          if(block_umat_cache)call left%put_omat(str(left%length),trRho_left)
+          if(save_umat)call left%save_omat(str(left%length),trRho_left,&
                suffix_dmrg('left')//".restart",append=(left%length/=2),gzip=.false.)
        endif
 #ifdef _MPI
@@ -301,8 +305,8 @@ contains
           truncation_error_right = 1d0 - sum(rho_right_evals(1:m_e))
           trRho_right            = rho_right%sparse(m_right,m_e)
           !>Store all the rotation/truncation matrices:
-          if(block_umat_cache)call right%put_omat(str(right%length),trRho_right,'')
-          if(save_umat)call right%save_omat(str(right%length),trRho_right,'',&
+          if(block_umat_cache)call right%put_omat(str(right%length),trRho_right)
+          if(save_umat)call right%save_omat(str(right%length),trRho_right,&
                suffix_dmrg('right')//".restart",append=(right%length/=2),gzip=.false.)
        endif
 #ifdef _MPI
@@ -355,14 +359,17 @@ contains
 
 
   !+------------------------------------------------------------------+
-  !PURPOSE:  
+  !PURPOSE:  Rernmalize operators in self.operators using Urho:
+  ! O' = Urho^+ . O. Urho
+  ! Note: dq(O') = dq(O) because renormalization acts within the same QN
+  ! sector subspaces. Updating the existing key preserves its dq metadata.
   !+------------------------------------------------------------------+
   subroutine operators_renormalization(self,Urho)
     type(block)                  :: self
     type(sparse_matrix)          :: Urho
     integer                      :: i,N,M  !N=self%dim,M=truncated dimension
     type(sparse_matrix)          :: Op,rOp
-    character(len=:),allocatable :: key,type
+    character(len=:),allocatable :: key
     !
     !0. Master checks dimensions:
     N = Urho%Nrow
@@ -377,11 +384,10 @@ contains
             stop "self.renormalize error: shape(Op) != [N,N] N=size(Rho,1)"
        !2. All nodes rotate&truncate
        rOp = rotate_and_truncate(Op)
-       !4. Master store renormalized operator
+       !3. Master store renormalized operator
        if(MpiMaster)then
           key  = self%operators%key(index=i)
-          type = self%operators%type(index=i)
-          call self%put_op(str(key),rOp, type)
+          call self%update_op(str(key),rOp)
        endif
     enddo
     self%dim = M

@@ -57,6 +57,9 @@ contains
        enddo
     end select
     !
+    !Validate the physical QN metadata before constructing any block.
+    call validate_model_dq(Hij)
+    !
     !SETUP the initial DMRG structure
     allocate(target_qn, source=DMRG_QN)
     init_left   = block(dot(1))
@@ -71,6 +74,134 @@ contains
     call load_default_restart_blocks()
     !
   end subroutine init_dmrg
+
+
+
+
+  !##################################################################
+  !              VALIDATE MODEL QUANTUM-NUMBER SHIFTS
+  !##################################################################
+  subroutine validate_model_dq(Hij)
+#ifdef _CMPLX
+    complex(8),dimension(:,:),intent(in) :: Hij
+#else
+    real(8),dimension(:,:),intent(in)    :: Hij
+#endif
+    integer                              :: ilat,qDim,ilink,Nlinks
+    integer                              :: io,jo,iorb,jorb,ispin,jspin
+    real(8),parameter                    :: dq_tol=100d0*epsilon(1d0)
+    real(8),dimension(:),allocatable     :: dqH,dqP,dqOi,dqOj,dqRef
+    character(len=1),dimension(2)        :: links=["n","p"]
+    character(len=:),allocatable         :: site_type,reference_type
+    character(len=:),allocatable         :: pkey,ikey,jkey,refkey
+    !
+    qDim=size(DMRG_QN)
+    if(qDim<=0)stop "validate_model_dq ERROR: empty DMRG_QN"
+    Nlinks=1;if(PBCdmrg)Nlinks=2
+    reference_type=to_lower(str(dot(1)%type()))
+    !
+    do ilat=1,size(dot)
+       if(.not.dot(ilat)%operators%is_valid(dim=dot(ilat)%Dim,qdim=qDim))&
+            stop "validate_model_dq ERROR: invalid operator list or dq dimension"
+       !
+       if(.not.dot(ilat)%operators%has_key("H"))&
+            stop "validate_model_dq ERROR: missing local H operator"
+       !
+       dqH=dot(ilat)%operators%dq(key="H")
+       if(any(abs(dqH)>dq_tol))&
+            stop "validate_model_dq ERROR: local H must have dq=0"
+       !
+       site_type=to_lower(str(dot(ilat)%type()))
+       if(site_type/=reference_type)&
+            stop "validate_model_dq ERROR: all sites must have the same type"
+       !
+       select case(site_type(1:1))
+       case("s")
+          !The implemented spin interaction is
+          !Hij(1,1) Sz_L.Sz_R + Hij(2,2) S+_L.S-_R + H.c.
+          do io=1,size(Hij,1)
+             do jo=1,size(Hij,2)
+               if(io/=jo.AND.Hij(io,jo)/=zero)&
+                  stop "validate_model_dq ERROR: off-diagonal spin Hij is not implemented"
+             enddo
+          enddo
+          !
+          do ilink=1,Nlinks
+             ikey="S"//dot(ilat)%okey(0,1,ilink=links(ilink))
+             jkey="S"//dot(ilat)%okey(0,2,ilink=links(ilink))
+             if(.not.dot(ilat)%operators%has_key(ikey))&
+                  stop "validate_model_dq ERROR: missing Sz operator"
+             if(.not.dot(ilat)%operators%has_key(jkey))&
+                  stop "validate_model_dq ERROR: missing S+ operator"
+             dqOi=dot(ilat)%operators%dq(key=ikey)
+             dqOj=dot(ilat)%operators%dq(key=jkey)
+             if(ilat>1)then
+                refkey="S"//dot(1)%okey(0,1,ilink=links(ilink))
+                dqRef=dot(1)%operators%dq(key=refkey)
+                if(any(abs(dqOi-dqRef)>dq_tol))&
+                     stop "validate_model_dq ERROR: inconsistent dq(Sz) across sites"
+                refkey="S"//dot(1)%okey(0,2,ilink=links(ilink))
+                dqRef=dot(1)%operators%dq(key=refkey)
+                if(any(abs(dqOj-dqRef)>dq_tol))&
+                     stop "validate_model_dq ERROR: inconsistent dq(S+) across sites"
+             endif
+             if(Hij(1,1)/=zero.AND.any(abs(2d0*dqOi)>dq_tol))&
+                  stop "validate_model_dq ERROR: Sz_L.Sz_R has nonzero total dq"
+          enddo
+          !
+          !
+       case("f","e")
+          do ilink=1,Nlinks
+             pkey="P"//dot(ilat)%okey(0,0,ilink=links(ilink))
+             if(.not.dot(ilat)%operators%has_key(pkey))&
+                  stop "validate_model_dq ERROR: missing fermionic sign operator"
+             dqP=dot(ilat)%operators%dq(key=pkey)
+             if(any(abs(dqP)>dq_tol))&
+                  stop "validate_model_dq ERROR: fermionic sign P must have dq=0"
+             !
+             do io=1,Nspin*Norb
+                iorb = mod(io-1,Norb)+1
+                ispin= (io-1)/Norb+1
+                ikey = "C"//dot(ilat)%okey(iorb,ispin,ilink=links(ilink))
+                if(.not.dot(ilat)%operators%has_key(ikey))&
+                     stop "validate_model_dq ERROR: missing C operator"
+                !
+                dqOi=dot(ilat)%operators%dq(key=ikey)
+                !
+                !HopH is global, so every site must use the same QN convention.
+                if(ilat>1)then
+                   refkey="C"//dot(1)%okey(iorb,ispin,ilink=links(ilink))
+                   if(.not.dot(1)%operators%has_key(refkey))&
+                        stop "validate_model_dq ERROR: incompatible site operator lists"
+                   dqRef=dot(1)%operators%dq(key=refkey)
+                   if(any(abs(dqOi-dqRef)>dq_tol))&
+                        stop "validate_model_dq ERROR: inconsistent dq(C) across sites"
+                endif
+                !
+                do jo=1,Nspin*Norb
+                   if(Hij(io,jo)==zero)cycle
+                   jorb = mod(jo-1,Norb)+1
+                   jspin= (jo-1)/Norb+1
+                   jkey="C"//dot(ilat)%okey(jorb,jspin,ilink=links(ilink))
+                   if(.not.dot(ilat)%operators%has_key(jkey))&
+                        stop "validate_model_dq ERROR: missing C operator"
+                   dqOj=dot(ilat)%operators%dq(key=jkey)
+                   if(any(abs((-dqOi+dqP)+dqOj)>dq_tol))then
+                      if(MpiMaster)write(LOGfile,*)&
+                           "validate_model_dq: non-conserving HopH entry",io,jo,&
+                           " on site",ilat," link ",links(ilink)
+                      stop "validate_model_dq ERROR: HopH term has nonzero total dq"
+                   endif
+                enddo
+             enddo
+          enddo
+       case default
+          stop "validate_model_dq ERROR: unsupported site type"
+       end select
+    enddo
+  end subroutine validate_model_dq
+
+
 
 
   subroutine load_default_restart_blocks()
@@ -90,6 +221,9 @@ contains
        if(MpiMaster)write(LOGfile,*)"init_DMRG WARNING: incomplete default block restart pair found; using fresh initial blocks."
     endif
   end subroutine load_default_restart_blocks
+
+
+
 
 
 

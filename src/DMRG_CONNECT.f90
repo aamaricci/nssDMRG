@@ -16,16 +16,17 @@ contains
   ! a SITE "DOT" (specified in the init)
   !-----------------------------------------------------------------!
   subroutine enlarge_block(self,dot,label,link)
-    type(block)                  :: self
-    type(site)                   :: dot
-    character(len=*),optional    :: label
-    character(len=*),optional    :: link
-    character(len=1)             :: label_
-    character(len=1)             :: ilink,olink
-    character(len=:),allocatable :: key,dtype,otype,error_otype
-    type(tbasis)                 :: self_basis,dot_basis,enl_basis
-    type(sparse_matrix)          :: Hb,Hd,H2,eO
-    integer                      :: i,l
+    type(block)                      :: self
+    type(site)                       :: dot
+    character(len=*),optional        :: label
+    character(len=*),optional        :: link
+    character(len=1)                 :: label_
+    character(len=1)                 :: ilink,olink
+    character(len=:),allocatable     :: key,dtype,otype,error_otype,error_dotkey
+    type(tbasis)                     :: self_basis,dot_basis,enl_basis
+    type(sparse_matrix)              :: Hb,Hd,H2,eO
+    integer                          :: i,l
+    real(8),dimension(:),allocatable :: dq_self,dq_dot
     !
     label_='l'; if(present(label))label_=to_lower(str(label(1:1)))
     iLink ="n";if(present(Link))iLink=to_lower(str(Link(1:1)))
@@ -39,16 +40,19 @@ contains
     t0=t_start()
     !
     dtype=dot%type()
-
+    !
+    !Checks: quite self-explanatory
     select case(label_)
     case default;stop "Enlarge_Block ERROR: label_ not in ['l','r']"
     case ("l","r");continue
     end select
     !
+    !
     select case(iLink)
     case default;stop "Enlarge_Block ERROR: iLink not in ['n','p']"
     case ("n","p");continue
     end select
+    !
     !
     if(.not.self%operators%has_key("H"))&
          stop "Enlarge_Block ERROR: Missing self.H operator in the list"
@@ -57,11 +61,14 @@ contains
     if(dtype/=self%type())&
          stop "Enlarge_Block ERROR: Dot.Type != Self.Type"
     !
+    !
     dtype=to_lower(dtype(1:1))
     select case(dtype)
     case default;stop "Enlarge_Block ERROR: wrong dot.Type"
     case ("s","f","e","b");continue
     end select
+    !
+    !
     !> Update Hamiltonian:
     if(MpiMaster)then
 #ifdef _DEBUG
@@ -104,12 +111,22 @@ contains
              end select
           end select
        end select
-       call self%put_op("H", Hb+Hd+H2, type="bosonic")
+       !
+       !This is clearly redundant as dq('H')=0 but I added it here for completeness. Better safe than sorry.
+       dq_self = self%operators%dq(key="H")
+       dq_dot  = dot%operators%dq(key="H")
+       if(size(dq_self)/=size(dq_dot)) stop "enlarge_block error: incompatible dq dimensions for H"
+       if(any(dq_self/=dq_dot))stop "enlarge_block error: incompatible block/site dq for H"
+       if(any(dq_self/=0d0))stop "enlarge_block error: H must have dq=0!"
+       call self%update_op("H",Hb+Hd+H2)
        write(LOGfile,*)"Build&Put H*",t_stop()
        !
        !
        !
        !> Update all the other operators in the list involved in the enlargement procedure:
+       ! I and P carry dq=0, so tensoring an operator with either of them
+       ! leaves its dq unchanged. update_op changes only the matrix and
+       ! preserves the metadata already associated with the block key.
 #ifdef _DEBUG
        write(LOGfile,*)"DEBUG: ENLARGE block: update Op list"
 #endif
@@ -121,7 +138,9 @@ contains
           otype = otype(1:1)
           olink = to_lower(key(len(key):len(key)))
           !
+          !
           error_otype="Enlarge_BLock ERROR: wrong self.operators.type L: !\in['Bosonic','Fermionic','PSign']"
+          error_dotkey="Enlarge_BLock ERROR: key missing in dot: "//str(key)
           select case(iLink)
           case ("n")                    !OBC/PBC_next
              select case(label_)
@@ -138,7 +157,9 @@ contains
                    case('f');eO = self%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    case('p');eO = self%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    end select
-                   call self%put_op(key, eO.x.dot%operators%op(key), type=otype)
+                   if(.not.dot%operators%has_key(key))stop error_dotkey
+                   call self%update_op(key,eO.x.dot%operators%op(key))
+
                 case ("p")
                    !        [@-o...o-]-o
                    !Bosons   : O_L -> O_L.x.i_d
@@ -150,7 +171,7 @@ contains
                    case('f');eO = Id(dot%dim)
                    case('p');eO = dot%operators%op(key="P"//dot%okey(0,0,ilink=olink))
                    end select
-                   call self%put_op(key, self%operators%op(key).x.eO, type=otype )
+                   call self%update_op(key,self%operators%op(key).x.eO)
                 end select
              case ("r")
                 select case(olink)
@@ -165,7 +186,8 @@ contains
                    case('f');eO = Id(self%dim)
                    case('p');eO = self%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    end select
-                   call self%put_op(key, dot%operators%op(key).x.eO, type=otype )
+                   if(.not.dot%operators%has_key(key))stop error_dotkey
+                   call self%update_op(key,dot%operators%op(key).x.eO)
                 case ("p")
                    !        o-[-o...o-@]
                    !Bosons   : O_R -> i_d.x.O_R
@@ -177,7 +199,7 @@ contains
                    case('f');eO = dot%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    case('p');eO = dot%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    end select
-                   call self%put_op(key, eO.x.self%operators%op(key), type=otype)
+                   call self%update_op(key,eO.x.self%operators%op(key))
                 end select
              end select
           case ("p")                    !PBC_prev
@@ -195,7 +217,7 @@ contains
                    case('f');eO = dot%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    case('p');eO = dot%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    end select
-                   call self%put_op(key, eO.x.self%operators%op(key), type=otype)
+                   call self%update_op(key,eO.x.self%operators%op(key))
                 case ("p")
                    !      @-[-o...o-o]
                    !Bosons   : O_L -> O_d.x.i_L
@@ -207,7 +229,8 @@ contains
                    case('f');eO = Id(self%dim)
                    case('p');eO = self%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    end select
-                   call self%put_op(key, dot%operators%op(key).x.eO, type=otype )
+                   if(.not.dot%operators%has_key(key))stop error_dotkey
+                   call self%update_op(key,dot%operators%op(key).x.eO)
                 end select
              case ("r")
                 select case(olink)
@@ -222,7 +245,7 @@ contains
                    case('f');eO = Id(dot%dim)
                    case('p');eO = dot%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    end select
-                   call self%put_op(key, self%operators%op(key).x.eO, type=otype )
+                   call self%update_op(key,self%operators%op(key).x.eO)
                 case ("p")
                    !     [o-o...o-]-@
                    !Bosons   : O_R -> i_R.x.O_d
@@ -234,7 +257,8 @@ contains
                    case('f');eO = self%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    case('p');eO = self%operators%op(key="P"//self%okey(0,0,ilink=olink))
                    end select
-                   call self%put_op(key, eO.x.dot%operators%op(key), type=otype)
+                   if(.not.dot%operators%has_key(key))stop error_dotkey
+                   call self%update_op(key,eO.x.dot%operators%op(key))
                 end select
              end select
           end select
@@ -277,9 +301,12 @@ contains
     call Hb%free()
     call Hd%free()
     call H2%free()
+    call eO%free()
     call self_basis%free()
     call dot_basis%free()
     call enl_basis%free()
+    if(allocated(dq_self))deallocate(dq_self)
+    if(allocated(dq_dot))deallocate(dq_dot)
     !
 #ifdef _MPI
     call Barrier_MPI(MpiComm)

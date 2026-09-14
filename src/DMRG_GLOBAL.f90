@@ -7,6 +7,7 @@ MODULE DMRG_GLOBAL
   USE MATRIX_BLOCKS
   USE TUPLE_BASIS
   USE LIST_OPERATORS
+  USE LIST_OMATRICES
   USE LIST_SECTORS
   USE SITES
   USE BLOCKS
@@ -116,19 +117,7 @@ MODULE DMRG_GLOBAL
   !
   integer,dimension(:),allocatable               :: b2gMap,g2bMap
   !
-  !Memory pool for HxV direct product 
-  type(sparse_matrix),allocatable,dimension(:)   :: Hleft,Hright
-  type(sparse_matrix),allocatable,dimension(:,:) :: A,B
-  type(tstates),allocatable,dimension(:)         :: SBleft_states,SBright_states
-  type(tstates),allocatable,dimension(:)         :: SBleft_maps,SBright_maps
-  type(sparse_matrix)                            :: Lazy_Hl,Lazy_Hr
-  type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Sl_n,Lazy_Sr_n
-  type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Sl_p,Lazy_Sr_p
-  type(sparse_matrix),allocatable,dimension(:)   :: Lazy_Cr_n,Lazy_Cr_p
-  type(sparse_matrix),allocatable,dimension(:)   :: Lazy_CdgP_n,Lazy_CdgP_p
   integer,dimension(:),allocatable               :: Dls,Drs,Offset
-  integer,dimension(:,:),allocatable             :: RowOffset,ColOffset,isb2jsb
-  integer,dimension(:,:),allocatable             :: IsHconjg
 
 
   !Profiling stuff
@@ -230,6 +219,10 @@ MODULE DMRG_GLOBAL
 #endif
 
 
+  !-> used in DMRG_MEASURE to perform H|gs>
+  public :: sb2block_states
+
+
 contains
 
 
@@ -238,7 +231,63 @@ contains
 
 
   
-  
+
+
+  !##################################################################
+  !              RETURN LEFT.states or RIGHT.states
+  !              contributing to the SUPERBLOCK with
+  !              a given QN
+  !. sb_sector: inherited from VARS_GLOBAL
+  !##################################################################
+  function sb2block_states(q,label) result(states)
+    real(8),dimension(:)             :: q
+    character(len=*)                 :: label
+    integer,dimension(:),allocatable :: tmp,states,sb_map
+    integer                          :: i,istate,l,r,isb,m,Rdim
+    !
+    if(.not.associated(sb_sector%root))&
+        stop "sb2block_states error: sb_sector is not allocated"
+    !
+    if(allocated(states))deallocate(states)
+    !
+    !> get the map from the QN of the sector:
+    sb_map = sb_sector%map(qn=q)
+    !
+    !> left,right, sb_sector and sb_states have to be known at this time:
+    ! add a check
+#ifdef _MPI
+    if(MpiStatus)then
+      if(MpiMaster)rDim=right%Dim
+      call Bcast_MPI(MpiComm,rDim)
+    else
+      rDim=right%Dim
+    endif
+#else
+    rDim=right%Dim
+#endif
+    allocate(tmp(size(sb_map)))
+    select case(to_lower(str(label)))
+    case("left","l","sys","s")
+      do i=1,size(sb_map)
+          istate = sb_states(sb_map(i))
+          l = (istate-1)/rDim+1
+          tmp(i) = l
+      enddo
+    case("right","r","env","e")
+      do i=1,size(sb_map)
+          istate = sb_states(sb_map(i))
+          r = mod(istate,rDim);if(r==0)r=rDim
+          tmp(i)=r
+      enddo
+    end select
+    allocate(states, source=uniq(tmp))
+    deallocate(tmp)
+  end function sb2block_states
+
+
+
+
+
 
 
 
@@ -1012,5 +1061,3 @@ contains
 
 
 END MODULE DMRG_GLOBAL
-
-

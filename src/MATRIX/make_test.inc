@@ -5,7 +5,7 @@ SF_LIB:=$(shell pkg-config --libs scifor)
 
 TYPE=DBLE
 
-FLAG= -cpp -D_DEBUG -D_$(TYPE) -D_MPI -Og -p -g -Wsurprising -Waliasing -fwhole-file -fcheck=all -fbacktrace -fbounds-check  -ffree-line-length-none -fPIC -w -fallow-argument-mismatch -fopenmp
+FLAG= -cpp -D_DEBUG -D_$(TYPE) -D_MPI -Og -g -Wsurprising -Waliasing -fwhole-file -fcheck=all -fbacktrace -fbounds-check  -ffree-line-length-none -fPIC -w -fallow-argument-mismatch -fopenmp
 
 
 define VER
