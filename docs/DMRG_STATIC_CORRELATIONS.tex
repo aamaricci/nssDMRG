@@ -1,0 +1,529 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{enumitem}
+\usepackage{listings}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  urlcolor=blue!55!black
+}
+
+\lstdefinestyle{fortran}{
+  language=Fortran,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!60!black},
+  commentstyle=\color{green!40!black},
+  frame=single,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true
+}
+
+\newcommand{\ket}[1]{\lvert #1\rangle}
+\newcommand{\bra}[1]{\langle #1\rvert}
+\newcommand{\avg}[1]{\left\langle #1\right\rangle}
+\newcommand{\Hil}{\mathcal H}
+\newcommand{\dd}{\mathrm d}
+
+\title{Static Correlation Functions in \texttt{nssDMRG}\\
+       \large Mathematical Conventions and Implementation Notes}
+\author{}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\section{Purpose and scope}
+
+The implementation in \texttt{DMRG\_MEASURE} explicitly constructs the
+operator product $O_A(i)O_B(j)$ in the final renormalized basis and evaluates
+its expectation value on the stored superblock state.  The principal
+difficulties are that the two operators may belong to the same DMRG block or
+to opposite blocks, and that fermionically odd operators require the correct
+parity string.
+
+The geometrical cases are
+\begin{equation}
+  i,j\in L, \qquad i,j\in R, \qquad i\in L,\;j\in R,
+\end{equation}
+plus the special local case $i=j$.
+
+\section{Correlation functions and public interface}
+
+The generic routine evaluates
+\begin{equation}
+  C_{AB}(i,j)
+  =\bra{\Psi}O_A(i)O_B(j)\ket{\Psi},
+\end{equation}
+where $\ket{\Psi}$ is the stored superblock state in the target quantum-number
+sector.  If \texttt{connected=.true.}, the result is instead
+\begin{equation}
+  C^{\mathrm c}_{AB}(i,j)
+  =\avg{O_A(i)O_B(j)}
+   -\avg{O_A(i)}\avg{O_B(j)}.
+\end{equation}
+
+The preferred key-based interface is
+\begin{lstlisting}[style=fortran]
+corr = Measure_Corr_DMRG(keyA,keyB,posA,posB)
+corr = Measure_Corr_DMRG(keyA,keyB,posA,posB,connected=.true.)
+\end{lstlisting}
+In this form, the matrix, quantum-number shift, and operator type are obtained
+together from \texttt{LIST\_OPERATORS}.
+
+The lower-level interface is intended for conjugated or externally composed
+operators:
+\begin{lstlisting}[style=fortran]
+corr = Measure_Corr_DMRG(OpA,dqA,OpB,dqB,posA,posB,typeA,typeB)
+corr = Measure_Corr_DMRG(OpA,dqA,OpB,dqB,posA,posB,typeA,typeB,&
+                         connected=.true.)
+\end{lstlisting}
+Here the caller is responsible for supplying consistent shifts and operator
+types.
+
+\section{Quantum-number shifts}
+
+For every operator the convention is
+\begin{equation}
+  dq(O)=Q_{\mathrm{out}}-Q_{\mathrm{in}},
+\end{equation}
+or, equivalently,
+\begin{equation}
+  O\ket{q}\longmapsto\ket{q+dq(O)}.
+\end{equation}
+For a product of Abelian operators,
+\begin{equation}
+  dq(O_AO_B)=dq_A+dq_B.
+\end{equation}
+
+Since the expectation value is evaluated within a fixed total sector,
+\begin{equation}
+  \avg{O_AO_B}\ne 0
+  \quad\Longrightarrow\quad
+  dq_A+dq_B=0.
+\end{equation}
+Failure of this condition is a selection rule rather than an invalid input;
+the routine therefore returns zero.
+
+For example,
+\begin{align}
+  dq(S^+)+dq(S^-)&=0,\\
+  dq(c^\dagger_{\uparrow})+dq(c_{\uparrow})
+    &=(+1,0)+(-1,0)=(0,0).
+\end{align}
+Conversely, in a particle-number eigenstate,
+\begin{equation}
+  \avg{c^\dagger_{i\uparrow}c^\dagger_{j\downarrow}}=0,
+\end{equation}
+because its total shift is $(+1,+1)$.  Such an operator may still represent a
+transition between different sectors; the present routine computes an
+expectation value within one fixed sector.
+
+\section{Fermionic grading}
+
+The quantum-number shift does not determine the fermionic sign structure.
+One must also specify the $\mathbb Z_2$ grading
+\begin{equation}
+  p(O)=N_f(O)\bmod 2,
+\end{equation}
+where $N_f(O)$ is the number of elementary $c$ or $c^\dagger$ factors in $O$.
+Examples are
+\begin{align}
+  p(c)=p(c^\dagger)&=1,\\
+  p(cn)&=1,\\
+  p(n)=p(c^\dagger c)&=0,\\
+  p(S^+)=p(c^\dagger_\uparrow c_\downarrow)&=0,\\
+  p(\Delta)=p(c_\downarrow c_\uparrow)&=0,\\
+  p(P)=p((-1)^N)&=0.
+\end{align}
+Composition obeys
+\begin{equation}
+  p(O_AO_B)=p(O_A)+p(O_B)\pmod 2.
+\end{equation}
+
+In the current implementation, \texttt{type="fermionic"} denotes an odd
+operator.  For expectation values in a state of definite fermion parity,
+the total operator must be even.  Thus even--even and odd--odd products are
+allowed; even--odd products vanish.  An odd--odd product is even overall, but
+requires a parity string.
+
+The shift and grading are independent metadata.  For example, the pair
+operator $\Delta^\dagger=c^\dagger_\uparrow c^\dagger_\downarrow$ is even but
+has a nonzero quantum-number shift.
+
+\section{Superblock state and sector decomposition}
+
+The stored state is expanded in the product basis of the final left and right
+blocks:
+\begin{equation}
+  \ket{\Psi}
+  =\sum_{\alpha,\beta}\Psi_{\alpha\beta}
+   \ket{\alpha}_L\otimes\ket{\beta}_R.
+\end{equation}
+If $\ket{\alpha}_L\in\Hil_L(q)$ and the total quantum number is $Q$, the
+compatible right state belongs to $\Hil_R(Q-q)$.  Consequently,
+\begin{equation}
+  \ket{\Psi}=\bigoplus_q\ket{\Psi_q},
+  \qquad
+  \ket{\Psi_q}\in\Hil_L(q)\otimes\Hil_R(Q-q).
+\end{equation}
+
+During measurement initialization, \texttt{LI} and \texttt{RI} store the
+block states associated with each superblock sector.  The inverse maps
+\texttt{Lmap} and \texttt{Rmap} convert a full block-state index into its
+index inside a sector.  They are used to construct rectangular operator
+blocks efficiently when $dq\ne0$.
+
+\section{Local case: equal positions}
+
+For $i=j$, the product is first formed in the local Hilbert space, preserving
+the requested order:
+\begin{equation}
+  O_{AB}(i)=O_A(i)O_B(i).
+\end{equation}
+It is then embedded into the growing block and transported to the final
+renormalized basis.  No Jordan--Wigner string is introduced in this case.
+The ordering is essential; for example,
+\begin{equation}
+  c_i^\dagger c_i=n_i,
+  \qquad
+  c_ic_i^\dagger=1-n_i.
+\end{equation}
+
+\section{Transport through block growth}
+
+Let $U_n$ map the enlarged block basis at step $n$ to the retained basis.
+An operator transforms as
+\begin{equation}
+  \widetilde O^{(n)}=U_n^\dagger O^{(n)}U_n.
+\end{equation}
+After the next site is introduced,
+\begin{equation}
+  O^{(n+1)}
+  =\widetilde O^{(n)}\otimes X_{n+1},
+\end{equation}
+where $X_{n+1}$ is either a requested local factor or the identity.  In
+schematic form,
+\begin{equation}
+  O^{(n)}
+  \longrightarrow U_n^\dagger O^{(n)}U_n
+  \longrightarrow
+  \left(U_n^\dagger O^{(n)}U_n\right)\otimes X_{n+1}.
+\end{equation}
+The actual tensor-product ordering is chosen consistently with left/right
+block growth and with the OBC/PBC convention.
+
+The generic constructor \texttt{Build\_Product\_Block\_DMRG} performs this
+operation.  It maps physical positions to growth indices using
+\texttt{b2gMap}, starts with the first nontrivial factor entering the block,
+inserts identities at all unrelated growth steps, and continues until the
+final block basis is reached.
+
+\section{Why same-block products must be composed before truncation}
+
+Suppose that both operators belong to the same block.  The correct
+representation of their product in the retained basis is
+\begin{equation}
+  U^\dagger O_AO_BU.
+\end{equation}
+Projecting the operators separately and multiplying afterwards gives instead
+\begin{equation}
+  (U^\dagger O_AU)(U^\dagger O_BU)
+  =U^\dagger O_A\underbrace{UU^\dagger}_{\mathcal P}O_BU.
+\end{equation}
+Since $U$ is generally rectangular,
+\begin{equation}
+  UU^\dagger=\mathcal P\ne I,
+\end{equation}
+and therefore
+\begin{equation}
+  U^\dagger O_AO_BU
+  \ne
+  (U^\dagger O_AU)(U^\dagger O_BU)
+\end{equation}
+in general.  The local factors must consequently be joined before all later
+truncations.
+
+\section{Parity-even operators in the same block}
+
+For parity-even operators at distinct positions,
+\texttt{Build\_Corr\_Block\_DMRG} delegates to the generic product
+constructor.  The procedure is:
+\begin{enumerate}[label=\arabic*.]
+  \item map each physical position to its block-growth index;
+  \item determine which nontrivial factor enters first;
+  \item build that first factor;
+  \item apply each subsequent $U_n$;
+  \item insert identities at intermediate sites;
+  \item insert the other factor when its site enters;
+  \item continue to the final block basis.
+\end{enumerate}
+
+The resulting operator is either $O_{AB}^L$ or $O_{AB}^R$, and its average is
+evaluated as
+\begin{equation}
+  \bra{\Psi}O_{AB}^L\otimes I_R\ket{\Psi}
+  \quad\text{or}\quad
+  \bra{\Psi}I_L\otimes O_{AB}^R\ket{\Psi}.
+\end{equation}
+
+\section{Odd fermionic operators in the same block}
+
+For two odd operators at $i<j$, the tensor-product representation used by
+\texttt{nssDMRG} is
+\begin{equation}
+  O_iO_j
+  \longrightarrow
+  (O_iP_i)P_{i+1}\cdots P_{j-1}O_j,
+  \qquad P_k=(-1)^{N_k}.
+\end{equation}
+For example,
+\begin{equation}
+  c_i^\dagger c_j
+  \longrightarrow
+  (c_i^\dagger P_i)P_{i+1}\cdots P_{j-1}c_j.
+\end{equation}
+The factor list passed to the generic constructor is therefore
+\begin{equation}
+  \left[O_iP_i,\,P_{i+1},\,\ldots,\,P_{j-1},\,O_j\right].
+\end{equation}
+
+If the requested order has the first argument on the right, the string is
+still assembled in spatial left-to-right order.  Exchanging the two odd
+endpoints once produces
+\begin{equation}
+  O_A(i)O_B(j)=-O_B(j)O_A(i),
+  \qquad i\ne j,
+\end{equation}
+and the final operator is multiplied by $-1$.
+
+\section{Operators on opposite sides of the cut}
+
+For $i\in L$ and $j\in R$, parity-even operators give
+\begin{equation}
+  C_{AB}(i,j)
+  =\bra{\Psi}O_A^L(i)\otimes O_B^R(j)\ket{\Psi}.
+\end{equation}
+The two factors are independently transported to the final bases of their
+blocks.  This expectation value cannot be evaluated by a same-block average,
+because neither tensor factor is the identity.  It requires an explicit
+superblock contraction.
+
+\subsection{Sector transitions}
+
+The left operator maps
+\begin{equation}
+  O_L:\Hil_L(q_{\mathrm{in}})\longrightarrow\Hil_L(q_{\mathrm{out}}),
+  \qquad
+  q_{\mathrm{out}}=q_{\mathrm{in}}+dq_L.
+\end{equation}
+Writing $q=q_{\mathrm{out}}$ gives
+\begin{equation}
+  q_{\mathrm{in}}=q-dq_L.
+\end{equation}
+Thus the rows of the filtered operator belong to the output sector $q$, and
+its columns belong to the input sector $q-dq_L$.  The corresponding
+rectangular block is
+\begin{equation}
+  A_q=
+  O_L\big|_{\Hil_L(q-dq_L)\rightarrow\Hil_L(q)}.
+\end{equation}
+
+Conservation of the total quantum number requires
+\begin{equation}
+  dq_R=-dq_L,
+\end{equation}
+so that the right rectangular block performs the compatible transition.
+For each output sector $q$, the contribution is
+\begin{equation}
+  C_q
+  =\bra{\Psi_q}A_q\otimes B_q\ket{\Psi_{q-dq_L}},
+\end{equation}
+and the full correlation is
+\begin{equation}
+  C_{AB}(i,j)=\sum_q C_q.
+\end{equation}
+
+\subsection{Matrix form of the contraction}
+
+For a fixed sector, reshape the superblock vector as a matrix
+$\Psi_{\alpha\beta}$, where $\alpha$ and $\beta$ are left- and right-block
+indices.  Then
+\begin{equation}
+  \Phi_{\alpha\beta}
+  =\sum_{\alpha',\beta'}
+   A_{\alpha\alpha'}B_{\beta\beta'}
+   \Psi_{\alpha'\beta'},
+\end{equation}
+or, subject to the vectorization convention,
+\begin{equation}
+  \Phi=A\Psi B^{\mathsf T}.
+\end{equation}
+The expectation value is
+\begin{equation}
+  C=\sum_{\alpha,\beta}
+  \Psi_{\alpha\beta}^*\Phi_{\alpha\beta}.
+\end{equation}
+
+The implementation applies the two factors successively and never constructs
+the full Kronecker matrix $A\otimes B$.  This substantially reduces memory
+usage.
+
+\subsection{Distributed contraction}
+
+In MPI mode the superblock vector is distributed among processes.  The same
+mathematical operation is performed in two data layouts:
+\begin{equation}
+  \Psi
+  \xrightarrow{B}X
+  \xrightarrow{\text{MPI transpose}}X^{\mathsf T}
+  \xrightarrow{A}\Phi^{\mathsf T}
+  \xrightarrow{\text{MPI transpose}}\Phi.
+\end{equation}
+Each process evaluates its local scalar product
+\begin{equation}
+  C_r=\bra{\Psi_r}\Phi_r\rangle,
+\end{equation}
+and the total value is obtained through
+\begin{equation}
+  C=\sum_r C_r.
+\end{equation}
+
+\section{Odd fermionic string across the cut}
+
+For $i\in L$, $j\in R$, and $i<j$,
+\begin{equation}
+  O_iO_j
+  =(O_iP_i)P_{i+1}\cdots P_L
+   P_{L+1}\cdots P_{j-1}O_j.
+\end{equation}
+The string is split into
+\begin{align}
+  O_L^{\mathrm{string}}
+  &=(O_iP_i)P_{i+1}\cdots P_L,\\
+  O_R^{\mathrm{string}}
+  &=P_{L+1}\cdots P_{j-1}O_j.
+\end{align}
+The correlator becomes
+\begin{equation}
+  C_{AB}(i,j)
+  =\bra{\Psi}
+   O_L^{\mathrm{string}}\otimes O_R^{\mathrm{string}}
+   \ket{\Psi}.
+\end{equation}
+For adjacent sites at the cut, this reduces to the convention already used
+for hopping terms,
+\begin{equation}
+  (c_L^\dagger P_L)\otimes c_R.
+\end{equation}
+If the requested operator order is right-to-left, one exchange of odd
+endpoints produces the additional minus sign.
+
+\section{Connected correlations}
+
+For \texttt{connected=.true.}, the disconnected contribution is subtracted
+after the full two-point function has been computed.  A one-point average can
+be nonzero only for an even operator with zero shift:
+\begin{equation}
+  dq(O)=0,
+  \qquad
+  p(O)=0.
+\end{equation}
+If either condition fails, the one-point function vanishes by symmetry, and
+the implementation avoids evaluating it.
+
+\section{Spin--spin wrapper}
+
+The spin wrapper uses
+\begin{equation}
+  \mathbf S_i\cdot\mathbf S_j
+  =S_i^zS_j^z
+   +\frac12S_i^+S_j^-
+   +\frac12S_i^-S_j^+.
+\end{equation}
+Accordingly,
+\begin{equation}
+  \avg{\mathbf S_i\cdot\mathbf S_j}
+  =\avg{S_i^zS_j^z}
+   +\frac12\avg{S_i^+S_j^-}
+   +\frac12\avg{S_i^-S_j^+}.
+\end{equation}
+Each term separately satisfies $dq_A+dq_B=0$.  Spin operators are
+fermionically even, including the electronic realization
+$S^+=c^\dagger_\uparrow c_\downarrow$, and therefore require no parity
+string.
+
+\section{Spin-orbital-resolved density correlations}
+
+The density wrapper returns the matrix
+\begin{equation}
+  C_{ab}(i,j)=\avg{n_{ia}n_{jb}},
+  \qquad a,b=1,\ldots,N_{so},
+\end{equation}
+where
+\begin{equation}
+  N_{so}=N_{\mathrm{spin}}N_{\mathrm{orb}},
+  \qquad
+  a=i_{\mathrm{orb}}+(i_{\mathrm{spin}}-1)N_{\mathrm{orb}}.
+\end{equation}
+For each spin-orbital,
+\begin{equation}
+  n_a=c_a^\dagger c_a,
+  \qquad dq(n_a)=0,
+  \qquad p(n_a)=0.
+\end{equation}
+Consequently, no fermionic string is needed.  In connected mode,
+\begin{equation}
+  C^{\mathrm c}_{ab}(i,j)
+  =\avg{n_{ia}n_{jb}}-\avg{n_{ia}}\avg{n_{jb}}.
+\end{equation}
+The total-density correlation can be recovered as
+\begin{equation}
+  \avg{N_iN_j}
+  =\sum_{a,b=1}^{N_{so}}C_{ab}(i,j),
+  \qquad
+  N_i=\sum_a n_{ia}.
+\end{equation}
+
+\section{Complete measurement flow}
+
+The generic measurement proceeds as follows:
+\begin{enumerate}[label=\arabic*.]
+  \item Initialize the measurement state and load the blocks, rotation
+        matrices, sector decomposition, and superblock vector.
+  \item Validate positions and the dimensions of the two shifts.
+  \item Apply the selection rules
+        \begin{equation*}
+          dq_A+dq_B=0,
+          \qquad
+          p_A+p_B=0\pmod 2.
+        \end{equation*}
+  \item If $i=j$, compose the two operators locally in the requested order.
+  \item If both positions belong to one block, build the complete product
+        before subsequent truncations.  Insert the parity string for two odd
+        endpoints.
+  \item If the positions belong to opposite blocks, build the two final block
+        operators separately, split the fermionic string at the cut when
+        necessary, filter all rectangular sector transitions, and evaluate
+        $\bra{\Psi}O_L\otimes O_R\ket{\Psi}$.
+  \item If requested, subtract the disconnected one-point contribution.
+\end{enumerate}
+
+The two independent pieces of physical metadata are therefore
+\begin{equation}
+  \boxed{dq(O)}
+  \qquad\text{and}\qquad
+  \boxed{p(O)}.
+\end{equation}
+
+\end{document}

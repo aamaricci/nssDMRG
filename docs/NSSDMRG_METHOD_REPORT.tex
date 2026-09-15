@@ -1,0 +1,630 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=2.45cm]{geometry}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=red!45!black,
+  urlcolor=blue!50!black,
+  pdftitle={nssDMRG: an entanglement-informed distributed DMRG method}
+}
+
+\newcommand{\ket}[1]{\lvert #1\rangle}
+\newcommand{\bra}[1]{\langle #1\rvert}
+\newcommand{\braket}[2]{\langle #1\vert #2\rangle}
+\newcommand{\avg}[1]{\left\langle #1\right\rangle}
+\newcommand{\Hil}{\mathcal H}
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\OpVec}{\operatorname{Vec}}
+\newcommand{\Id}{\mathbb 1}
+\newcommand{\Order}{\mathcal O}
+
+\title{\texttt{nssDMRG}: an Entanglement-Informed\\
+Distributed DMRG Method}
+\author{Method report}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\texttt{nssDMRG} is a distributed-memory implementation of the density-matrix
+renormalization group for one-dimensional interacting spin and fermionic
+systems.  Its computational design follows directly from the bipartite and
+symmetry-resolved structure of the many-body wavefunction.  At every DMRG
+step, the superblock state is represented as a collection of matrices indexed
+by conserved Abelian quantum numbers.  Distributing the columns of these
+matrices across MPI processes makes one class of Hamiltonian contractions
+strictly local, while the complementary contractions are evaluated using
+communication-efficient distributed transpositions.  The full superblock
+Hamiltonian need not be assembled: its action on a vector is reduced to
+sector-restricted block operations that form the kernel of a Krylov
+eigensolver.  This report summarizes the mathematical construction, the DMRG
+workflow, and the main computational choices---sparse versus direct
+application, cached versus lazy filtering, symmetry-aware communicators,
+boundary conditions, and persistent storage---without entering the details
+of individual source-code procedures.
+\end{abstract}
+
+\tableofcontents
+
+\section{Overview}
+
+The density-matrix renormalization group (DMRG) is an adaptive variational
+method for quantum lattice systems.  Its efficiency in one dimension follows
+from the fact that physically relevant low-energy states often have limited
+bipartite entanglement.  Instead of retaining a fixed local basis as the
+system grows, DMRG repeatedly selects the states carrying the dominant
+Schmidt weight across a cut.
+
+The same entanglement cut also provides a natural distributed representation
+of the wavefunction.  This observation is the organizing principle of
+\texttt{nssDMRG}: the computational data layout is not imposed independently
+of the many-body state, but is inherited from its product-basis and symmetry
+structure.  The representation serves two purposes simultaneously:
+\begin{enumerate}[label=(\roman*)]
+  \item it identifies the optimal retained states through the reduced density
+        matrix;
+  \item it decomposes the dominant Hamiltonian--vector product into local
+        contractions and a small number of structured collective
+        communications.
+\end{enumerate}
+
+The library supports infinite- and finite-system DMRG, Abelian quantum-number
+conservation, spin and Hubbard-type fermionic models, open and periodic
+boundary conditions, MPI-distributed superblock diagonalization, restart and
+checkpoint facilities, and post-processing measurements based on stored
+renormalization data.
+
+\section{Lattice problem and symmetry decomposition}
+
+Consider a finite lattice with Hilbert space
+\begin{equation}
+  \Hil=\bigotimes_{i=1}^{S}\Hil_i
+\end{equation}
+and a finite-range, or more generally $K$-local, Hamiltonian
+\begin{equation}
+  H=\sum_{n=1}^{K}\sum_{i_1,\ldots,i_n}
+  h^{(n)}_{i_1,\ldots,i_n},
+  \qquad
+  h^{(n)}_{i_1,\ldots,i_n}\propto
+  \prod_{m=1}^{n}O_{i_m}.
+\end{equation}
+An entanglement cut partitions the lattice into left and right components,
+\begin{equation}
+  \Hil=\Hil_L\otimes\Hil_R.
+\end{equation}
+
+We assume an Abelian conserved quantity, or a set of mutually commuting
+quantities, denoted collectively by $Q$:
+\begin{equation}
+  [H,Q]=0.
+\end{equation}
+The partition is chosen so that each subsystem carries well-defined quantum
+numbers.  For additive symmetries,
+\begin{equation}
+  q_L+q_R=Q;
+\end{equation}
+more generally, one may write $q_L\oplus q_R=Q$, with $\oplus$ the Abelian
+composition law.  Typical examples are
+\begin{equation}
+  q=S^z
+\end{equation}
+for spin chains and
+\begin{equation}
+  \boldsymbol q=(N_\uparrow,N_\downarrow)
+\end{equation}
+for number-conserving electronic systems.
+
+Within a fixed total sector $Q$, only compatible pairs $(q_L,q_R)$ occur.
+The wavefunction decomposes as
+\begin{equation}
+  \ket{\Psi}
+  =\sum_q\sum_{l_q=1}^{d_q^L}\sum_{r_q=1}^{d_q^R}
+  \Psi^q_{r_ql_q}\,
+  \ket{l_q}_L\otimes\ket{r_q}_R.
+  \label{eq:psi-decomp}
+\end{equation}
+Equation~\eqref{eq:psi-decomp} establishes an isomorphism between a
+symmetry-resolved state vector and a collection of dense matrices
+\begin{equation}
+  \widehat\Psi^q\in\mathbb C^{d_q^R\times d_q^L}.
+\end{equation}
+This matrix representation is central both to entanglement truncation and to
+the parallel Hamiltonian application.
+
+\section{DMRG renormalization cycle}
+
+\subsection{Block enlargement and superblock construction}
+
+At a generic step, renormalized left and right blocks are enlarged by one or
+more physical sites.  For open boundary conditions, the left block grows
+toward the right and the right block grows toward the left.  The enlarged
+blocks form a superblock,
+\begin{equation}
+  \Hil_{\mathrm{SB}}=\Hil_L\otimes\Hil_R,
+\end{equation}
+restricted to the target total quantum-number sector.
+
+The superblock Hamiltonian has the generic bipartite form
+\begin{equation}
+  H_{\mathrm{SB}}
+  =H_L\otimes\Id_R
+   +\Id_L\otimes H_R
+   +\sum_m A_m\otimes B_m.
+  \label{eq:hsb}
+\end{equation}
+The first two terms contain the Hamiltonians internal to each block.  The
+finite set of products $A_m\otimes B_m$ contains interactions crossing the
+cut: spin couplings, hopping processes, density interactions, or other
+model-dependent links.
+
+In a symmetry-adapted basis, every object in Eq.~\eqref{eq:hsb} is resolved
+into blocks.  A local operator $O$ carries a quantum-number shift
+\begin{equation}
+  dq(O)=q_{\mathrm{out}}-q_{\mathrm{in}},
+  \qquad
+  O:\Hil(q_{\mathrm{in}})\longrightarrow\Hil(q_{\mathrm{out}}).
+\end{equation}
+For each coupling $A_m\otimes B_m$, total symmetry conservation requires
+\begin{equation}
+  dq(A_m)+dq(B_m)=0.
+  \label{eq:dq-conservation}
+\end{equation}
+This metadata determines exactly which rectangular symmetry blocks can
+contribute, without relying on model-specific assumptions.
+
+\subsection{Ground-state optimization}
+
+The lowest state of $H_{\mathrm{SB}}$ is found with an iterative Krylov-space
+eigensolver.  Such algorithms require repeated evaluations of
+\begin{equation}
+  \ket{y}=H_{\mathrm{SB}}\ket{x},
+\end{equation}
+but do not intrinsically require storage of the full Hamiltonian.  Since this
+matrix--vector product dominates the run time of large calculations, its
+representation and parallel execution determine the practical scalability of
+the method.
+
+\subsection{Reduced density matrix and truncation}
+
+Once the optimized state is available, the left reduced density matrix is
+\begin{equation}
+  \rho_L=\Tr_R\ket{\Psi}\bra{\Psi}.
+\end{equation}
+Using Eq.~\eqref{eq:psi-decomp}, it is block diagonal:
+\begin{equation}
+  \rho_L=\bigoplus_q\rho_L^q,
+  \qquad
+  \rho_L^q=(\widehat\Psi^q)^\dagger\widehat\Psi^q.
+  \label{eq:rdm}
+\end{equation}
+An analogous expression holds for $\rho_R$.  Diagonalizing these matrices
+gives the Schmidt probabilities $\lambda_{q\alpha}$ and the corresponding
+renormalization transformations.  The retained basis is selected either by a
+maximum bond dimension $\chi$ or by a discarded-weight criterion.  Its
+sector-resolved dimensions obey
+\begin{equation}
+  \sum_q\chi_q^{L}=\chi_L,
+  \qquad
+  \sum_q\chi_q^{R}=\chi_R.
+\end{equation}
+
+For a retained isometry $U$, every block operator is transformed according to
+\begin{equation}
+  O\longmapsto U^\dagger O U.
+\end{equation}
+The renormalized blocks are then reused in the next growth step or in the next
+finite-system sweep.  The truncation error is the total discarded density
+matrix weight,
+\begin{equation}
+  \epsilon_{\mathrm{tr}}
+  =1-\sum_{(q,\alpha)\in\mathrm{kept}}\lambda_{q\alpha}.
+\end{equation}
+
+\section{Direct Hamiltonian application}
+
+\subsection{Vectorization identity}
+
+Let a superblock sector be represented by the matrix $X^q$ associated with a
+vector $\ket{x_q}=\OpVec(X^q)$, where columns are stacked.  For compatible
+matrices $A$ and $B$,
+\begin{equation}
+  (A\otimes B)\OpVec(X)=\OpVec(BXA^{\mathsf T}).
+  \label{eq:vec-identity}
+\end{equation}
+This identity replaces a very large sparse Kronecker product by two much
+smaller matrix contractions.
+
+Applied to Eq.~\eqref{eq:hsb}, it yields
+\begin{align}
+  (\Id_L\otimes H_R)\OpVec(X)
+    &=\OpVec(H_RX),\\
+  (H_L\otimes\Id_R)\OpVec(X)
+    &=\OpVec(XH_L^{\mathsf T}),\\
+  (A_m\otimes B_m)\OpVec(X)
+    &=\OpVec(B_mXA_m^{\mathsf T}).
+\end{align}
+The superblock Hamiltonian is therefore applied term by term, exploiting its
+tensor-product and symmetry-block structure.  The direct formulation avoids
+assembling $H_{\mathrm{SB}}$, whose dimension grows as the product of the two
+block dimensions.
+
+\subsection{Sector-restricted products}
+
+Suppose that a coupling operator connects an input left sector $k$ to an
+output sector $q$.  Its filtered block is
+\begin{equation}
+  A_m(q,k):\Hil_L(k)\longrightarrow\Hil_L(q),
+\end{equation}
+and the right factor performs the complementary transition dictated by
+Eq.~\eqref{eq:dq-conservation}.  The corresponding contribution is
+\begin{equation}
+  \OpVec\!\left[B_m(q,k)X^kA_m(q,k)^{\mathsf T}\right].
+  \label{eq:coupling-product}
+\end{equation}
+Only symmetry-compatible pairs $(q,k)$ are evaluated.  This substantially
+reduces both arithmetic and storage compared with operations in the full
+product basis.
+
+\section{Entanglement-informed MPI distribution}
+
+\subsection{Column-wise ownership}
+
+For each symmetry block $X^q\in\mathbb C^{d_q^R\times d_q^L}$, columns are
+distributed among $P$ MPI processes.  Process $p$ owns a subset of the left
+basis states and the associated column panel
+\begin{equation}
+  X_p^q\in\mathbb C^{d_q^R\times\Theta_{q,p}},
+  \qquad
+  \sum_p\Theta_{q,p}=d_q^L.
+\end{equation}
+This decomposition is entanglement-informed because the matrix blocks are
+exactly those induced by the symmetry-preserving entanglement cut.  In DMRG,
+their dimensions are the sector-resolved bond dimensions selected from the
+Schmidt spectrum.
+
+The layout has an immediate computational advantage.  Left multiplication by
+a right-block operator is local:
+\begin{equation}
+  Y_p^q=H_R^qX_p^q.
+\end{equation}
+Every process possesses the complete row extent needed for each of its local
+columns, and no communication is required.
+
+\subsection{Distributed transposition}
+
+Right multiplication by a left-block operator couples columns that reside on
+different processes.  Instead of gathering the full block, the method applies
+a distributed transposition, denoted by $T^*$,
+\begin{equation}
+  \{X_p^q\}_{p=1}^{P}
+  \xrightarrow{T^*}
+  \{(X^{q\,\mathsf T})_p\}_{p=1}^{P}.
+\end{equation}
+It is implemented through an all-to-all variable-size data exchange.  After
+the transposition, the formerly nonlocal contraction becomes local; a second
+$T^*$ restores the original distribution:
+\begin{equation}
+  X^q
+  \xrightarrow{T^*}
+  X^{q\,\mathsf T}
+  \xrightarrow{H_L^q}
+  H_L^qX^{q\,\mathsf T}
+  \xrightarrow{T^*}
+  X^q(H_L^q)^{\mathsf T}.
+\end{equation}
+
+\subsection{Coupling terms}
+
+For Eq.~\eqref{eq:coupling-product}, the right factor is applied first:
+\begin{equation}
+  C_m(q,k)=B_m(q,k)X^k.
+\end{equation}
+This multiplication is local and the intermediate matrix inherits the
+column-wise distribution of $X^k$.  The remaining contraction is rewritten as
+\begin{equation}
+  C_m(q,k)A_m(q,k)^{\mathsf T}
+  =\left[A_m(q,k)C_m(q,k)^{T^*}\right]^{T^*}.
+\end{equation}
+It therefore requires two distributed transpositions but no global assembly
+of either the wavefunction or the Kronecker operator.  The complete
+Hamiltonian application consists of local sparse--dense contractions plus a
+small, structured set of collective communications.
+
+\section{Entanglement, workload, and symmetry fragmentation}
+
+The entanglement Hamiltonian and entropy associated with the cut are
+\begin{equation}
+  H_E=-\log\rho_L,
+  \qquad
+  S_L=-\Tr(\rho_L\log\rho_L).
+\end{equation}
+Writing the entanglement levels as $\xi_{q\alpha}=-\log\lambda_{q\alpha}$,
+the weight of sector $q$ is
+\begin{equation}
+  W_q=
+  \frac{\sum_\alpha e^{-\xi_{q\alpha}}}
+       {\sum_{k,\alpha}e^{-\xi_{k\alpha}}}.
+\end{equation}
+Since columns of $\widehat\Psi^q$ are distributed across processes, the same
+sector structure that carries the Schmidt weight also determines the
+distributed workload.  A process-level weight may be defined as
+\begin{equation}
+  w_p=\sum_{q\in\mathcal Q_p}W_q,
+  \qquad
+  \mathcal Q_p=\{q:\Theta_{q,p}>0\},
+\end{equation}
+with inverse participation ratio
+\begin{equation}
+  W_P=\sum_{p=1}^{P}w_p^2.
+\end{equation}
+This quantity characterizes how broadly the entanglement weight is resolved
+over the process-owned subspaces.
+
+The sector dimensions are generally nonuniform.  A few large sectors coexist
+with many smaller sectors, producing \emph{symmetry fragmentation}.  This
+fragmentation controls load balance and the ratio between communication and
+computation.  Arithmetic is governed primarily by the volume of the matrix
+blocks, while distributed transposition is controlled by their communicated
+surface.  Consequently, increasing the total bond dimension improves strong
+scaling until local panels become too small and latency dominates.
+
+\subsection{Symmetry-aware subcommunicators}
+
+A sector with dimensions $d_q^L\times d_q^R$ cannot usefully employ more
+processes than its available rows or columns.  Assigning all global processes
+to every small sector would create idle ranks and unnecessary collective
+communication.  The implementation therefore uses a sector-dependent active
+process count of the form
+\begin{equation}
+  P_{\mathrm{active}}(q)
+  =\max\!\left[
+    \min(d_q^L,P),\,
+    \min(d_q^R,P)
+  \right],
+\end{equation}
+and constructs MPI subcommunicators accordingly.  Each sector is processed
+only by ranks that own a nonzero share in at least one relevant layout.  This
+reduces symmetry-induced imbalance and prevents small blocks from imposing
+global synchronization on the full process pool.
+
+\section{Computational modes}
+
+The superblock eigensolver can use three principal Hamiltonian representations.
+
+\begin{table}[ht]
+  \centering
+  \small
+  \begin{tabular}{@{}p{0.21\linewidth}p{0.34\linewidth}p{0.36\linewidth}@{}}
+    \toprule
+    Mode & Persistent objects & Main trade-off \\
+    \midrule
+    Sparse
+      & Explicit sparse $H_{\mathrm{SB}}$
+      & Simple application, but potentially prohibitive superblock memory. \\
+    Direct cached
+      & Sector-filtered $H_L(q)$, $H_R(q)$, $A_m(q,k)$, and $B_m(q,k)$
+      & Fast repeated Krylov products at the cost of a larger persistent footprint. \\
+    Direct lazy
+      & Full enlarged block operators, sector state lists, and inverse maps
+      & Smaller persistent memory; filtered blocks are rebuilt during each application. \\
+    \bottomrule
+  \end{tabular}
+  \caption{High-level Hamiltonian-application strategies.}
+\end{table}
+
+The sparse mode explicitly constructs the superblock Hamiltonian.  It is
+useful for smaller problems and as an independent reference path.  The direct
+modes exploit Eq.~\eqref{eq:vec-identity} and are preferable when explicit
+superblock storage becomes limiting.
+
+In cached direct mode, all symmetry-filtered operator blocks needed by the
+Krylov iteration are prepared once and reused.  This minimizes filtering
+overhead but may consume memory comparable to an additional distributed copy
+of the enlarged operator content.
+
+In lazy direct mode, only the enlarged operators and lightweight maps between
+full and sector-local indices remain resident.  A required block
+\begin{equation}
+  O(q,k)=O\big|_{\Hil(k)\rightarrow\Hil(q)}
+\end{equation}
+is constructed immediately before use and released afterwards.  The mode
+trades repeated sparse filtering for a substantially smaller memory footprint,
+which permits larger retained bases in memory-bound calculations.  Cached and
+lazy modes share the same mathematical Hamiltonian action and MPI data layout.
+
+\section{Spin and fermionic models}
+
+For a spin chain, a representative nearest-neighbor Hamiltonian is
+\begin{equation}
+  H=J_z\sum_i S_i^zS_{i+1}^z
+    +\frac{J_{xy}}{2}\sum_i
+     \left(S_i^+S_{i+1}^-+S_i^-S_{i+1}^+\right).
+\end{equation}
+The connecting terms naturally take the form $A_m\otimes B_m$, and their
+quantum-number shifts cancel pairwise.
+
+For a Hubbard chain,
+\begin{equation}
+  H=-\sum_{i,\sigma}t_{i\sigma}
+    \left(c_{i\sigma}^\dagger c_{i+1,\sigma}+\mathrm{H.c.}\right)
+    +U\sum_i n_{i\uparrow}n_{i\downarrow},
+\end{equation}
+fermionic anticommutation must be respected across tensor-product boundaries.
+With the convention used by the code, a boundary hopping factor on the left
+is represented using the parity operator $P=(-1)^N$, for example
+\begin{equation}
+  (c_{L\sigma}^\dagger P_L)\otimes c_{R\sigma}.
+\end{equation}
+The parity factor is prepared consistently in both cached and lazy direct
+modes.  Its presence changes the algebraic operator content but not the
+distributed contraction pattern.
+
+\section{Open and periodic boundary conditions}
+
+With open boundaries, each block grows toward the central cut and the
+superblock contains a single set of links connecting the enlarged blocks.
+Periodic boundaries add couplings closing the two outer ends.  A naive growth
+scheme would leave one boundary operator buried under many renormalization
+steps, degrading its representation.
+
+The periodic strategy therefore alternates block growth on the two sides.
+Each block carries operators associated with both link directions, and the
+superblock is connected at both ends.  This preserves a more balanced
+renormalization history for the two periodic links.  The physical ordering of
+sites is tracked separately from their growth order, a distinction that is
+also required when reconstructing nonlocal observables.
+
+\section{Memory management, restart, and measurements}
+
+Large DMRG calculations must control persistent storage as carefully as the
+Hamiltonian application.  The implementation separates several classes of
+data:
+\begin{itemize}
+  \item renormalized block objects required to continue or restart a run;
+  \item rotation matrices $U_n$ required by finite sweeps and by
+        post-processing operators;
+  \item stored superblock states and sector metadata required for later
+        measurements;
+  \item temporary sector-filtered operators used by direct products.
+\end{itemize}
+
+Block checkpoints may be written at every step or restricted to the latest
+state.  Rotation matrices may remain cached in memory for speed or be stored
+on disk to reduce resident memory.  Likewise, a measurement state can be
+saved so that local observables, entanglement quantities, and static
+correlations can be evaluated without repeating the expensive ground-state
+optimization.
+
+The use of explicit quantum-number shifts for operators extends the same
+sector logic from the Hamiltonian to measurements.  A correlation
+\begin{equation}
+  \avg{O_A(i)O_B(j)}
+\end{equation}
+is allowed within a fixed total sector only if
+\begin{equation}
+  dq(O_A)+dq(O_B)=0.
+\end{equation}
+Operators residing on opposite sides of the cut are contracted with the same
+rectangular, symmetry-resolved tensor-product machinery used by the direct
+Hamiltonian application.  Thus the measurement layer reuses the central
+mathematical abstraction rather than constructing full superblock operators.
+
+\section{End-to-end workflow}
+
+A complete calculation can be summarized as follows:
+\begin{enumerate}[label=\arabic*.]
+  \item Define the local Hilbert space, local Hamiltonian, boundary operators,
+        conserved Abelian quantum numbers, and operator shifts.
+  \item Initialize left and right blocks and choose the target total sector.
+  \item Enlarge both blocks and construct the symmetry-compatible superblock
+        basis.
+  \item Select sparse, cached-direct, or lazy-direct Hamiltonian application.
+  \item Distribute every wavefunction sector matrix by columns and build
+        sector-specific MPI communicators.
+  \item Solve the superblock eigenproblem through repeated distributed
+        Hamiltonian--vector products.
+  \item Form the symmetry-block reduced density matrices, diagonalize them,
+        and select the retained Schmidt states.
+  \item Renormalize the blocks and all required operators.
+  \item Repeat the growth process for infinite DMRG, or move the cut through
+        the lattice during finite sweeps.
+  \item Store checkpoints, rotation matrices, and measurement states according
+        to the selected memory policy.
+  \item Evaluate observables and correlations in post-processing when desired.
+\end{enumerate}
+
+\section{Scaling picture and practical regime}
+
+For sufficiently large sector matrices, local contractions dominate the
+cost, while the distributed transpositions introduce a subleading
+communication contribution.  The ideal strong-scaling behavior is
+approximately
+\begin{equation}
+  T(P)\sim\frac{T(1)}{P},
+\end{equation}
+until one of three effects becomes important:
+\begin{enumerate}[label=(\roman*)]
+  \item symmetry fragmentation leaves too little work in small sectors;
+  \item the local matrix panels approach cache- or latency-dominated sizes;
+  \item filtering and collective-communication overhead becomes comparable
+        with arithmetic.
+\end{enumerate}
+Increasing the bond dimension generally improves parallel efficiency because
+it increases the local volume-to-communication-surface ratio.  The relevant
+limit is consequently not only the formal complexity of DMRG, but also the
+entanglement- and symmetry-controlled distribution of the retained basis.
+
+The approach is not conceptually restricted to DMRG.  It requires a
+symmetry-preserving bipartition, a wavefunction represented in the associated
+product basis, and a Hamiltonian expressible as a manageable sum of products
+across the cut.  DMRG provides a particularly natural realization because its
+Schmidt decomposition already constructs and truncates precisely this basis.
+
+\section{Summary}
+
+The central design principle of \texttt{nssDMRG} is that entanglement and
+symmetry organize both the physical approximation and the distributed
+computation.  The entanglement cut produces a set of symmetry-resolved
+wavefunction matrices.  These matrices define the retained DMRG basis, the
+MPI ownership layout, the allowed operator transitions, and the communication
+pattern of the Hamiltonian application.
+
+The superblock Hamiltonian is reduced to local contractions of the form
+\begin{equation}
+  BXA^{\mathsf T},
+\end{equation}
+with distributed transpositions used only when the contraction direction is
+incompatible with the current data layout.  Symmetry-sector filtering removes
+forbidden work, while sector-specific communicators prevent fragmented blocks
+from involving idle processes.  Cached and lazy modes expose an explicit
+time--memory trade-off without changing the underlying algorithm.  Together
+with symmetry-aware truncation, periodic-growth strategies, restart support,
+and post-processing measurements, this yields a scalable DMRG framework in
+which computational organization follows directly from the quantum structure
+of the state.
+
+\begin{thebibliography}{9}
+
+\bibitem{White1992}
+S.~R. White,
+``Density matrix formulation for quantum renormalization groups,''
+\emph{Physical Review Letters} \textbf{69}, 2863 (1992).
+
+\bibitem{White1993}
+S.~R. White,
+``Density-matrix algorithms for quantum renormalization groups,''
+\emph{Physical Review B} \textbf{48}, 10345 (1993).
+
+\bibitem{Schollwock2011}
+U. Schollw\"ock,
+``The density-matrix renormalization group in the age of matrix product
+states,''
+\emph{Annals of Physics} \textbf{326}, 96 (2011).
+
+\bibitem{Amaricci2022}
+A. Amaricci \emph{et al.},
+``EDIpack: A parallel exact diagonalization package for quantum impurity
+problems,''
+\emph{Computer Physics Communications} \textbf{273}, 108261 (2022).
+
+\bibitem{MethodManuscript}
+A. Amaricci,
+``Entanglement-informed distributed wavefunction approach to scalable quantum
+many-body systems,'' manuscript (2026).
+
+\end{thebibliography}
+
+\end{document}

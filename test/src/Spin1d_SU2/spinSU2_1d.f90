@@ -10,9 +10,18 @@ program dmrg_spin_1d
   integer                             :: i,Unit,L
   type(site),dimension(:),allocatable :: myDot
   type(sparse_matrix)                 :: bSz,bSp,SiSj
-  real(8),dimension(:,:),allocatable  :: Hlr
+#ifdef _CMPLX
+  complex(8),dimension(:,:),allocatable :: Hlr
+#else
+  real(8),dimension(:,:),allocatable    :: Hlr
+#endif
   real(8),dimension(:),allocatable    :: avSz,x,data,data_
   real(8),dimension(:),allocatable    :: e,s
+#ifdef _CMPLX
+  complex(8)                          :: Sii,Sll,Sll_,Slr,Slr_
+#else
+  real(8)                             :: Sii,Sll,Sll_,Slr,Slr_
+#endif
   integer                             :: irank,comm,rank,ierr
   logical                             :: master
 
@@ -38,7 +47,29 @@ program dmrg_spin_1d
   call run_DMRG()
 
   !Post-processing and measure quantities:
-  call Measure_DMRG(myDot(1)%operators%op(key="S_z"),pos=arange(1,Ldmrg),avOp=avSz)
+  call Measure_DMRG(myDot(1)%operators%op(key="S"//myDot(1)%okey(0,1,ilink="n")),&
+       pos=arange(1,Ldmrg),avOp=avSz)
+
+  !Generic static correlations: same site, same block and across the
+  !left/right superblock cut. The reversed correlators test both the
+  !growth-order construction and the sector-changing L/R contraction.
+  Sii  = Measure_SpinSpin_DMRG(1,1)
+  Sll  = Measure_SpinSpin_DMRG(1,2)
+  Sll_ = Measure_SpinSpin_DMRG(2,1)
+  Slr  = Measure_SpinSpin_DMRG(Ldmrg,Ldmrg+1)
+  Slr_ = Measure_SpinSpin_DMRG(Ldmrg+1,Ldmrg)
+  if(master)then
+#ifdef _CMPLX
+     call assert(Sii,cmplx(0.75d0,0d0,8),"<S_i.S_i>",tol=1d-10)
+     call assert(Sll,conjg(Sll_),"same-block <S_i.S_j> symmetry",tol=1d-10)
+     call assert(Slr,conjg(Slr_),"left/right <S_i.S_j> symmetry",tol=1d-10)
+#else
+     call assert(Sii,0.75d0,"<S_i.S_i>",tol=1d-10)
+     call assert(Sll,Sll_,"same-block <S_i.S_j> symmetry",tol=1d-10)
+     call assert(Slr,Slr_,"left/right <S_i.S_j> symmetry",tol=1d-10)
+#endif
+  endif
+  call End_Measure_DMRG()
 
   if(master)then
      !Check energy:
@@ -81,8 +112,3 @@ program dmrg_spin_1d
 
 
 end program dmrg_spin_1d
-
-
-
-
-

@@ -16,7 +16,15 @@ module DMRG_MEASURE
   public :: Advance_Op_DMRG
   public :: Advance_Corr_DMRG
   public :: Average_Op_DMRG
+  public :: Measure_Corr_DMRG
+  public :: Measure_SpinSpin_DMRG
+  public :: Measure_DensityDensity_DMRG
   public :: Write_DMRG
+
+  interface Measure_Corr_DMRG
+     module procedure :: Measure_Corr_keys_DMRG
+     module procedure :: Measure_Corr_ops_DMRG
+  end interface Measure_Corr_DMRG
 
   interface Write_DMRG
      module procedure :: write_user_scalar
@@ -35,6 +43,7 @@ module DMRG_MEASURE
   real(8),dimension(:),allocatable             :: dq
   type(sparse_matrix),allocatable,dimension(:) :: Olist
   type(tstates),dimension(:),allocatable       :: Li,Ri
+  type(tstates),dimension(:),allocatable       :: Lmap,Rmap
   logical                                      :: measure_status=.false.
   character(:),allocatable                     :: string
 !
@@ -55,7 +64,7 @@ contains
     real(8),dimension(:),allocatable :: qn
     character(len=*),optional        :: msg
     integer,dimension(2)             :: omat_dims
-    integer                          :: ilat,i,f,m
+    integer                          :: ilat,i,f,m,istate
     logical                          :: found_measure_state
     logical                          :: need_measure_state
     character(len=:),allocatable     :: default_suffix,current_suffix
@@ -118,10 +127,22 @@ contains
     !
     allocate(LI(Nsb))
     allocate(RI(Nsb))
+    allocate(Lmap(Nsb))
+    allocate(Rmap(Nsb))
     do isb=1,Nsb
        qn  = sb_sector%qn(index=isb)
        LI(isb)%states = sb2block_states(qn,'left')
        RI(isb)%states = sb2block_states(qn,'right')
+       !Inverse maps are required to filter rectangular dq-changing
+       !operator blocks without repeatedly searching the sector states.
+       allocate(Lmap(isb)%states(left%Dim));Lmap(isb)%states=0
+       allocate(Rmap(isb)%states(right%Dim));Rmap(isb)%states=0
+       do istate=1,size(LI(isb)%states)
+          Lmap(isb)%states(LI(isb)%states(istate))=istate
+       enddo
+       do istate=1,size(RI(isb)%states)
+          Rmap(isb)%states(RI(isb)%states(istate))=istate
+       enddo
     enddo
     suffix=label_DMRG('u')
     !
@@ -160,6 +181,8 @@ contains
     if(allocated(Olist))deallocate(Olist)
     if(allocated(Li))deallocate(Li)
     if(allocated(Ri))deallocate(Ri)
+    if(allocated(Lmap))deallocate(Lmap)
+    if(allocated(Rmap))deallocate(Rmap)
     call sb_delete_dims()
     if(.not.block_umat_cache)then   
       if(MpiMaster)then
@@ -190,31 +213,6 @@ contains
   end subroutine Error_measure_DMRG
 
 
-
-
-
-  !##################################################################
-  !              Measure local Operator Op
-  !Purpose: return the average value <gs|Op|gs> for a given Op
-  !##################################################################
-  function Measure_Op_DMRG(Op,pos) result(avOp)
-    type(sparse_matrix),intent(in) :: Op
-    integer                        :: pos
-    type(sparse_matrix)            :: Oi
-    real(8)                        :: avOp
-#ifdef _DEBUG
-    if(MpiMaster)write(LOGfile,*)"DEBUG: measure Op",pos
-#endif
-    if(.not.measure_status)call Init_Measure_DMRG()
-    if(.not.measure_status)then
-       avOp = zero
-       return
-    endif
-    Oi   = Build_Op_dmrg(Op,pos)
-    Oi   = Advance_Op_dmrg(Oi,pos)
-    avOp = Average_Op_dmrg(Oi,pos)
-    call Oi%free()
-  end function Measure_Op_DMRG
 
 
 
@@ -334,6 +332,808 @@ contains
   end subroutine Measure_DMRG_vector
 
 
+
+
+
+
+  
+  !##################################################################
+  !              Measure local Operator Op
+  !Purpose: return the average value <gs|Op|gs> for a given Op
+  !##################################################################
+  function Measure_Op_DMRG(Op,pos) result(avOp)
+    type(sparse_matrix),intent(in) :: Op
+    integer                        :: pos
+    type(sparse_matrix)            :: Oi
+    real(8)                        :: avOp
+#ifdef _DEBUG
+    if(MpiMaster)write(LOGfile,*)"DEBUG: measure Op",pos
+#endif
+    !
+    avOp = zero
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    Oi   = Build_Op_dmrg(Op,pos)
+    Oi   = Advance_Op_dmrg(Oi,pos)
+    avOp = Average_Op_dmrg(Oi,pos)
+    call Oi%free()
+  end function Measure_Op_DMRG
+
+
+
+
+
+  !##################################################################
+  !              MEASURE A GENERIC STATIC CORRELATION
+  !##################################################################
+  ! Measure a static two-point function from two operator keys:
+  ! $ C_{AB}(i,j)=\langle\Psi|O_A(i)O_B(j)|\Psi\rangle $.
+  ! If connected=.true. return instead
+  ! $ C^c_{AB}(i,j)=C_{AB}(i,j)
+  !                    -\langle O_A(i)\rangle\langle O_B(j)\rangle$.
+  ! Matrix, quantum-number shift and grading are read together from
+  ! LIST_OPERATORS; this is therefore the preferred public interface.
+  !
+  ! Example:
+  ! corr = Measure_Corr_DMRG(keyA,keyB,i,j,connected=.true.)
+  !
+  function Measure_Corr_keys_DMRG(keyA,keyB,posA,posB,connected) result(corr)
+    character(len=*),intent(in)       :: keyA,keyB
+    integer,intent(in)                :: posA,posB
+    logical,optional,intent(in)        :: connected
+#ifdef _CMPLX
+    complex(8)                        :: corr
+#else
+    real(8)                           :: corr
+#endif
+    type(sparse_matrix)               :: OpA,OpB
+    real(8),dimension(:),allocatable  :: dqA,dqB
+    character(len=:),allocatable      :: typeA,typeB
+    integer                           :: N
+    !
+    corr=zero
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    !
+    N=left%length+right%length
+    if(posA<1.OR.posA>N)stop "Measure_Corr_DMRG ERROR: posA not in [1,Ldmrg]"
+    if(posB<1.OR.posB>N)stop "Measure_Corr_DMRG ERROR: posB not in [1,Ldmrg]"
+    if(.not.dot(posA)%operators%has_key(keyA))&
+         stop "Measure_Corr_DMRG ERROR: keyA missing in site operator list"
+    if(.not.dot(posB)%operators%has_key(keyB))&
+         stop "Measure_Corr_DMRG ERROR: keyB missing in site operator list"
+    !
+    OpA   = dot(posA)%operators%op(key=keyA)
+    OpB   = dot(posB)%operators%op(key=keyB)
+    dqA   = dot(posA)%operators%dq(key=keyA)
+    dqB   = dot(posB)%operators%dq(key=keyB)
+    typeA = dot(posA)%operators%type(key=keyA)
+    typeB = dot(posB)%operators%type(key=keyB)
+    corr  = Measure_Corr_ops_DMRG(OpA,dqA,OpB,dqB,posA,posB,typeA,typeB,connected)
+    !
+    call OpA%free()
+    call OpB%free()
+  end function Measure_Corr_keys_DMRG
+
+
+
+
+  ! Low-level interface for composite or conjugated operators.
+  ! The caller supplies both shifts, defined by
+  ! $ O|q\rangle\longmapsto|q+dq(O)\rangle$, 
+  ! and the optional types used to determine the fermionic grading.
+  !
+  ! Example:
+  !
+  ! corr = Measure_Corr_DMRG(OpA,dqA,OpB,dqB,i,j,typeA,typeB,connected=.true.)
+  !
+  function Measure_Corr_ops_DMRG(OpA,dqA,OpB,dqB,posA,posB,typeA,typeB,connected) result(corr)
+    type(sparse_matrix),intent(in) :: OpA,OpB
+    real(8),dimension(:),intent(in):: dqA,dqB
+    integer,intent(in)             :: posA,posB
+    character(len=*),optional      :: typeA,typeB
+    logical,optional,intent(in)    :: connected
+#ifdef _CMPLX
+    complex(8)                     :: corr
+#else
+    real(8)                        :: corr
+#endif
+    type(sparse_matrix)            :: Oi,Oj,Oij
+    character(len=:),allocatable   :: typeA_,typeB_
+    integer                        :: L,N
+    logical                        :: oddA,oddB,connected_
+    real(8)                        :: avA,avB
+    real(8),parameter              :: dq_tol=100d0*epsilon(1d0)
+    !
+#ifdef _DEBUG
+    if(MpiMaster)write(LOGfile,*)"DEBUG: measure Corr",posA,posB
+#endif
+    !
+    typeA_="";if(present(typeA))typeA_=to_lower(str(typeA))
+    typeB_="";if(present(typeB))typeB_=to_lower(str(typeB))
+    !
+    corr=zero
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    !
+    L=left%length
+    N=L+right%length
+    if(posA<1.OR.posA>N)stop "Measure_Corr_DMRG ERROR: posA not in [1,Ldmrg]"
+    if(posB<1.OR.posB>N)stop "Measure_Corr_DMRG ERROR: posB not in [1,Ldmrg]"
+    if(size(dqA)/=size(current_target_qn))&
+         stop "Measure_Corr_DMRG ERROR: size(dqA) != QN dimension"
+    if(size(dqB)/=size(current_target_qn))&
+         stop "Measure_Corr_DMRG ERROR: size(dqB) != QN dimension"
+    !
+    !Check for fermion parity of the operator. 
+    !If odd then it is a fermion-like operator then 
+    !Wigner-Jordan strings shoule be included in the measurement.
+    oddA=is_odd_fermion_type(typeA_)
+    oddB=is_odd_fermion_type(typeB_)
+    connected_=.false.;if(present(connected))connected_=connected
+    !
+    !Check for forbidden expectation values
+    !A forbidden expectation value is zero, not an invalid input:
+    !  dq(O_A O_B)=dq_A+dq_B=0,
+    !  p(O_A O_B)=p_A+p_B=0 mod 2.
+    corr=zero
+    if(any(abs(dqA+dqB)>dq_tol).OR.(oddA.neqv.oddB))return
+    !
+    if(posA==posB)then
+       !At equal positions preserve the requested product order O_A.O_B.
+       Oij  = matmul(OpA,OpB)
+       Oi   = Build_Op_DMRG(Oij,posA)
+       Oj   = Advance_Op_DMRG(Oi,posA)
+       corr = Average_Op_DMRG(Oj,posA)
+    elseif((posA<=L.AND.posB<=L).OR.(posA>L.AND.posB>L))then
+       if(oddA)then
+          Oij=Build_Fermion_Corr_Block_DMRG(OpA,OpB,posA,posB)
+       else
+          Oij=Build_Corr_Block_DMRG(OpA,OpB,posA,posB)
+       endif
+       corr = Average_Op_DMRG(Oij,posA)
+    else
+       !Put the operator belonging to the left block first. For two odd
+       !operators this canonical reordering contributes one minus sign if
+       !the requested product was originally right-operator times left.
+       if(posA<=L)then
+          if(oddA)then
+             Oi=Build_Fermion_LR_End_DMRG(OpA,posA,'l')
+             Oj=Build_Fermion_LR_End_DMRG(OpB,posB,'r')
+          else
+             Oi=Build_Op_DMRG(OpA,posA)
+             Oi=Advance_Op_DMRG(Oi,posA)
+             Oj=Build_Op_DMRG(OpB,posB)
+             Oj=Advance_Op_DMRG(Oj,posB)
+          endif
+          corr=Average_Corr_LR_DMRG(Oi,dqA,Oj,dqB)
+       else
+          if(oddA)then
+             Oi=Build_Fermion_LR_End_DMRG(OpB,posB,'l')
+             Oj=Build_Fermion_LR_End_DMRG(OpA,posA,'r')
+          else
+             Oi=Build_Op_DMRG(OpB,posB)
+             Oi=Advance_Op_DMRG(Oi,posB)
+             Oj=Build_Op_DMRG(OpA,posA)
+             Oj=Advance_Op_DMRG(Oj,posA)
+          endif
+          corr=Average_Corr_LR_DMRG(Oi,dqB,Oj,dqA)
+          if(oddA)corr=-corr
+       endif
+    endif
+    !The disconnected term can be non-zero only for parity-even,
+    !dq=0 operators. Avoid measurements known to vanish by symmetry.
+    if(connected_)then
+       avA=zero;avB=zero
+       if(all(abs(dqA)<=dq_tol).AND..not.oddA)avA=Measure_Op_DMRG(OpA,posA)
+       if(all(abs(dqB)<=dq_tol).AND..not.oddB)avB=Measure_Op_DMRG(OpB,posB)
+       corr=corr-avA*avB
+    endif
+    !
+    call Oi%free()
+    call Oj%free()
+    call Oij%free()
+  end function Measure_Corr_ops_DMRG
+
+
+
+
+  !##################################################################
+  !                 PHYSICAL CORRELATION WRAPPERS
+  !##################################################################
+  !Return <S_i.S_j>=<Sz_i Sz_j>+1/2 <S+_i S-_j>+1/2 <S-_i S+_j>.
+  function Measure_SpinSpin_DMRG(posA,posB) result(corr)
+    integer,intent(in)       :: posA,posB
+#ifdef _CMPLX
+    complex(8)               :: corr
+#else
+    real(8)                  :: corr
+#endif
+    type(sparse_matrix)      :: SzA,SzB,SpA,SpB,SmA,SmB
+    real(8),allocatable      :: dqzA(:),dqzB(:),dqpA(:),dqpB(:)
+    character(:),allocatable :: key
+    !
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)then
+       corr=zero
+       return
+    endif
+    key="S"//dot(posA)%okey(0,1,ilink="n")
+    SzA=dot(posA)%operators%op(key);dqzA=dot(posA)%operators%dq(key)
+    key="S"//dot(posB)%okey(0,1,ilink="n")
+    SzB=dot(posB)%operators%op(key);dqzB=dot(posB)%operators%dq(key)
+    key="S"//dot(posA)%okey(0,2,ilink="n")
+    SpA=dot(posA)%operators%op(key);dqpA=dot(posA)%operators%dq(key)
+    key="S"//dot(posB)%okey(0,2,ilink="n")
+    SpB=dot(posB)%operators%op(key);dqpB=dot(posB)%operators%dq(key)
+    SmA=hconjg(SpA)
+    SmB=hconjg(SpB)
+    !
+    corr = Measure_Corr_ops_DMRG(SzA,dqzA,SzB,dqzB,posA,posB,"bosonic","bosonic")
+    corr = corr + 0.5d0*Measure_Corr_ops_DMRG(SpA,dqpA,SmB,-dqpB,posA,posB,"bosonic","bosonic")
+    corr = corr + 0.5d0*Measure_Corr_ops_DMRG(SmA,-dqpA,SpB,dqpB,posA,posB,"bosonic","bosonic")
+    !
+    call SzA%free();call SzB%free()
+    call SpA%free();call SpB%free()
+    call SmA%free();call SmB%free()
+  end function Measure_SpinSpin_DMRG
+
+
+  !> Return all spin-orbital resolved density correlations
+  !> \f[ C_{ab}(i,j)=\langle n_{ia}n_{jb}\rangle,
+  !>     \qquad n_a=c_a^\dagger c_a, \quad a,b=1,\ldots,N_{so}. \f]
+  !> The compound index follows the site convention
+  !> \f$a=i_{orb}+(i_{spin}-1)N_{orb}\f$.
+  function Measure_DensityDensity_DMRG(posA,posB,connected) result(corr)
+    integer,intent(in)       :: posA,posB
+    logical,optional,intent(in):: connected
+#ifdef _CMPLX
+    complex(8)               :: corr(Nspin*Norb,Nspin*Norb)
+#else
+    real(8)                  :: corr(Nspin*Norb,Nspin*Norb)
+#endif
+    type(sparse_matrix)      :: C,NopA(Nspin*Norb),NopB(Nspin*Norb)
+    real(8),allocatable      :: dq0(:)
+    character(:),allocatable :: key
+    integer                  :: io,jo,iorb,ispin,Nso
+    !
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)then
+       corr=zero
+       return
+    endif
+    Nso=Nspin*Norb
+    allocate(dq0(size(current_target_qn)));dq0=0d0
+    do io=1,Nso
+       iorb=mod(io-1,Norb)+1
+       ispin=(io-1)/Norb+1
+       !
+       key="C"//dot(posA)%okey(iorb,ispin,ilink="n")
+       C=dot(posA)%operators%op(key)
+       NopA(io)=matmul(hconjg(C),C)
+       call C%free()
+       !
+       key="C"//dot(posB)%okey(iorb,ispin,ilink="n")
+       C=dot(posB)%operators%op(key)
+       NopB(io)=matmul(hconjg(C),C)
+       call C%free()
+    enddo
+    !
+    do io=1,Nso
+       do jo=1,Nso
+          corr(io,jo)=Measure_Corr_ops_DMRG(NopA(io),dq0,NopB(jo),dq0,&
+               posA,posB,"bosonic","bosonic",connected)
+       enddo
+       call NopA(io)%free()
+       call NopB(io)%free()
+    enddo
+  end function Measure_DensityDensity_DMRG
+
+
+
+
+  !> Return the fermionic grading stored in LIST_OPERATORS:
+  !> \f[ p(O)=N_f(O)\pmod 2. \f]
+  !> type="fermionic" denotes p=1; P=(-1)^N has type="psign" and p=0.
+  function is_odd_fermion_type(otype) result(odd)
+    character(len=*),optional :: otype
+    character(:),allocatable  :: otype_
+    logical                   :: odd
+    otype_="";if(present(otype))otype_=to_lower(str(otype))
+    odd=.false.
+    if(len(otype_)>0)odd=otype_(1:1)=="f"
+  end function is_odd_fermion_type
+
+
+
+
+  !##################################################################
+  !       BUILD A PRODUCT OF LOCAL FACTORS INSIDE ONE DMRG BLOCK
+  !##################################################################
+  !> Build \f$\prod_a O_a(i_a)\f$ in one final block basis. Physical
+  !> positions are converted to growth indices through b2gMap. Starting
+  !> from the first non-trivial factor, each subsequent growth step is
+  !> \f[ O\longmapsto U_n^\dagger O U_n
+  !>                 \longmapsto (U_n^\dagger O U_n)\otimes X_{n+1}, \f]
+  !> where \f$X_{n+1}\f$ is either a requested local factor or identity.
+  function Build_Product_Block_DMRG(Ops,positions) result(Oprod)
+    type(sparse_matrix),intent(in) :: Ops(:)
+    integer,intent(in)             :: positions(:)
+    type(sparse_matrix)            :: Oprod
+    type(sparse_matrix)            :: U,X
+    character(len=1)               :: label
+    integer,allocatable            :: growth(:)
+    integer                        :: L,R,N,Np,ibeg,iend,it,ipos,j,ifactor
+    !
+    L=left%length
+    R=right%length
+    N=L+R
+    Np=size(positions)
+    if(Np==0.OR.size(Ops)/=Np)&
+         stop "Build_Product_Block_DMRG ERROR: incompatible factors and positions"
+    if(any(positions<1).OR.any(positions>N))&
+         stop "Build_Product_Block_DMRG ERROR: position not in [1,Ldmrg]"
+    if(any(positions<=L).AND.any(positions>L))&
+         stop "Build_Product_Block_DMRG ERROR: factors belong to different blocks"
+    do j=1,Np
+       if(count(positions==positions(j))/=1)&
+            stop "Build_Product_Block_DMRG ERROR: repeated position"
+    enddo
+    !
+    label='l';if(all(positions>L))label='r'
+    allocate(growth(Np))
+    do j=1,Np
+       growth(j)=growth_index(positions(j))
+    enddo
+    ifactor=minloc(growth,dim=1)
+    !
+    ibeg=growth(ifactor)
+    iend=L;if(label=='r')iend=R
+    !
+    Oprod=Build_Op_DMRG(Ops(ifactor),positions(ifactor),set_basis=.false.)
+    !
+    !At growth step n, rotate the old block and append the local factor
+    !at the site entering at n+1 (or the identity when no factor acts):
+    !  O_n -> U_n^\dagger O_n U_n -> O_{n+1}=O_n\otimes X_{n+1}.
+    do it=ibeg,iend-1
+       call get_U_and_rotate(it)
+       ipos=physical_position(it+1)
+       ifactor=0
+       do j=1,Np
+          if(positions(j)==ipos)ifactor=j
+       enddo
+       if(ifactor>0)then
+          X=Ops(ifactor)
+       else
+          X=Id(dot(ipos)%Dim)
+       endif
+       call enlarge_operator(X,it)
+       call X%free()
+    enddo
+    !
+    call U%free()
+    deallocate(growth)
+    !
+  contains
+    !Map a physical position to the corresponding block-growth index.
+    function growth_index(pos) result(index)
+      integer,intent(in) :: pos
+      integer            :: index
+      if(label=='l')then
+         index=b2gMap(pos)
+      else
+         index=b2gMap(N+1-pos)
+      endif
+    end function growth_index
+    !
+    !Inverse map: physical site introduced at a given growth step.
+    function physical_position(index) result(pos)
+      integer,intent(in) :: index
+      integer            :: pos,p
+      pos=0
+      select case(label)
+      case('l')
+         do p=1,L
+            if(b2gMap(p)==index)pos=p
+         enddo
+      case('r')
+         do p=L+1,N
+            if(b2gMap(N+1-p)==index)pos=p
+         enddo
+      end select
+      if(pos==0)stop "Build_Product_Block_DMRG ERROR: growth index not mapped"
+    end function physical_position
+
+    subroutine get_U_and_rotate(iter)
+      integer,intent(in) :: iter
+      select case(label)
+      case('l');if(MpiMaster)U=left%omatrices%op(key=str(iter))
+      case('r');if(MpiMaster)U=right%omatrices%op(key=str(iter))
+      end select
+#ifdef _MPI
+      if(MpiStatus)then
+         call U%bcast()
+         Oprod=(U%dgr().pm.Oprod).pm.U
+      else
+         Oprod=matmul(matmul(U%dgr(),Oprod),U)
+      endif
+#else
+      Oprod=matmul(matmul(U%dgr(),Oprod),U)
+#endif
+    end subroutine get_U_and_rotate
+
+    subroutine enlarge_operator(Op,iter)
+      type(sparse_matrix),intent(in) :: Op
+      integer,intent(in)             :: iter
+      select case(label)
+      case('l')
+         if(PBCdmrg)then
+            if(mod(iter,2)==0)then
+               Oprod=Op.x.Oprod
+            else
+               Oprod=Oprod.x.Op
+            endif
+         else
+            Oprod=Oprod.x.Op
+         endif
+      case('r')
+         if(PBCdmrg)then
+            if(mod(iter,2)==0)then
+               Oprod=Oprod.x.Op
+            else
+               Oprod=Op.x.Oprod
+            endif
+         else
+            Oprod=Op.x.Oprod
+         endif
+      end select
+    end subroutine enlarge_operator
+  end function Build_Product_Block_DMRG
+
+
+
+
+  !> Build two odd endpoints in the same block. For i<j:
+  !> \f[ O_iO_j=(O_iP_i)P_{i+1}\cdots P_{j-1}O_j,
+  !>     \qquad P_k=(-1)^{N_k}. \f]
+  !> If the requested order is j,i, one fermionic exchange adds -1.
+  function Build_Fermion_Corr_Block_DMRG(OpA,OpB,posA,posB) result(Oij)
+    type(sparse_matrix),intent(in) :: OpA,OpB
+    integer,intent(in)             :: posA,posB
+    type(sparse_matrix)            :: Oij
+    type(sparse_matrix),allocatable:: Ops(:)
+    type(sparse_matrix)            :: Psite
+    integer,allocatable            :: positions(:)
+    integer                        :: isite,pmin,pmax,j,Np
+    !
+    if(posA==posB)stop "Build_Fermion_Corr_Block_DMRG ERROR: equal positions"
+    pmin=min(posA,posB)
+    pmax=max(posA,posB)
+    Np=pmax-pmin+1
+    allocate(Ops(Np),positions(Np))
+    do j=1,Np
+       isite=pmin+j-1
+       positions(j)=isite
+       if(isite==pmin)then
+          if(posA==pmin)then
+             Ops(j)=OpA
+          else
+             Ops(j)=OpB
+          endif
+          Psite=local_parity_operator(isite)
+          Ops(j)=matmul(Ops(j),Psite)
+          call Psite%free()
+       elseif(isite==pmax)then
+          if(posA==pmax)then
+             Ops(j)=OpA
+          else
+             Ops(j)=OpB
+          endif
+       else
+          Ops(j)=local_parity_operator(isite)
+       endif
+    enddo
+    Oij=Build_Product_Block_DMRG(Ops,positions)
+    !Changing O_A(posA) O_B(posB) into physical left-to-right order is
+    !one exchange of odd operators when A is the right endpoint.
+    if(posA>posB)then
+       do j=1,Oij%Nrow
+          Oij%row(j)%vals=-one*Oij%row(j)%vals
+       enddo
+    endif
+    do j=1,Np
+       call Ops(j)%free()
+    enddo
+    deallocate(Ops,positions)
+  end function Build_Fermion_Corr_Block_DMRG
+
+
+
+
+  !> Build one half of a Jordan--Wigner string crossing the L/R cut:
+  !> \f[ O_iP_i\cdots P_L \f] for side='l', and
+  !> \f[ P_{L+1}\cdots P_{j-1}O_j \f] for side='r'.
+  function Build_Fermion_LR_End_DMRG(Op,pos,side) result(Ostring)
+    type(sparse_matrix),intent(in) :: Op
+    integer,intent(in)             :: pos
+    character(len=1),intent(in)    :: side
+    type(sparse_matrix)            :: Ostring
+    type(sparse_matrix),allocatable:: Ops(:)
+    type(sparse_matrix)            :: Psite
+    integer,allocatable            :: positions(:)
+    integer                        :: L,R,N,isite,pmin,pmax,j,Np
+    !
+    L=left%length;R=right%length;N=L+R
+    select case(side)
+    case('l')
+       if(pos<1.OR.pos>L)stop "Build_Fermion_LR_End_DMRG ERROR: left endpoint not in L"
+       pmin=pos;pmax=L
+    case('r')
+       if(pos<=L.OR.pos>N)stop "Build_Fermion_LR_End_DMRG ERROR: right endpoint not in R"
+       pmin=L+1;pmax=pos
+    case default
+       stop "Build_Fermion_LR_End_DMRG ERROR: side not in [l,r]"
+    end select
+    Np=pmax-pmin+1
+    allocate(Ops(Np),positions(Np))
+    do j=1,Np
+       isite=pmin+j-1
+       positions(j)=isite
+       select case(side)
+       case('l')
+          if(isite==pos)then
+             Psite=local_parity_operator(isite)
+             Ops(j)=matmul(Op,Psite)
+             call Psite%free()
+          else
+             Ops(j)=local_parity_operator(isite)
+          endif
+       case('r')
+          if(isite==pos)then
+             Ops(j)=Op
+          else
+             Ops(j)=local_parity_operator(isite)
+          endif
+       end select
+    enddo
+    Ostring=Build_Product_Block_DMRG(Ops,positions)
+    do j=1,Np
+       call Ops(j)%free()
+    enddo
+    deallocate(Ops,positions)
+  end function Build_Fermion_LR_End_DMRG
+
+
+
+
+  !> Return the local parity \f$P_i=(-1)^{N_i}\f$ using the same key
+  !> convention employed by enlarge_block and connect_fermion_blocks.
+  function local_parity_operator(pos) result(P)
+    integer,intent(in)       :: pos
+    type(sparse_matrix)      :: P
+    character(:),allocatable :: key
+    key="P"//dot(pos)%okey(0,0,ilink="n")
+    if(.not.dot(pos)%operators%has_key(key))&
+         stop "Measure_Corr_DMRG ERROR: missing local fermionic sign operator"
+    P=dot(pos)%operators%op(key)
+  end function local_parity_operator
+
+
+
+
+  !##################################################################
+  !       BUILD A TWO-SITE OPERATOR INSIDE THE SAME DMRG BLOCK
+  !##################################################################
+  !> Build two parity-even operators before every later truncation:
+  !> \f[ \widetilde O_{AB}=U^\dagger(O_AO_B)U. \f]
+  !> Projecting them separately would instead produce
+  !> \f$(U^\dagger O_AU)(U^\dagger O_BU)\f$, inserting \f$UU^\dagger\f$.
+  function Build_Corr_Block_DMRG(OpA,OpB,posA,posB) result(Oij)
+    type(sparse_matrix),intent(in) :: OpA,OpB
+    integer,intent(in)             :: posA,posB
+    type(sparse_matrix)            :: Oij
+    type(sparse_matrix)            :: Ops(2)
+    integer                        :: positions(2),L
+    !
+    L=left%length
+    if(posA==posB)stop "Build_Corr_Block_DMRG ERROR: equal positions"
+    if((posA<=L).neqv.(posB<=L))&
+         stop "Build_Corr_Block_DMRG ERROR: positions belong to different blocks"
+    !
+    Ops=[OpA,OpB]
+    positions=[posA,posB]
+    Oij=Build_Product_Block_DMRG(Ops,positions)
+    call Ops(1)%free();call Ops(2)%free()
+  end function Build_Corr_Block_DMRG
+
+
+
+
+  !##################################################################
+  !          AVERAGE OF O_LEFT x O_RIGHT ON THE SUPERBLOCK
+  !##################################################################
+  !> Contract operators on opposite sides of the superblock cut:
+  !> \f[ C=\langle\Psi|O_L\otimes O_R|\Psi\rangle. \f]
+  !> For an output sector \f$q\f$, the input sector is
+  !> \f[ q'=q-dq_L, \qquad dq_L+dq_R=0. \f]
+  !> sp_filter therefore constructs the rectangular maps
+  !> \f$O_{L,R}:\mathcal H(q')\rightarrow\mathcal H(q)\f$ before the
+  !> serial or distributed tensor-product contraction.
+  function Average_Corr_LR_DMRG(Oleft,dqLeft,Oright,dqRight) result(corr)
+    type(sparse_matrix),intent(in) :: Oleft,Oright
+    real(8),intent(in)             :: dqLeft(:),dqRight(:)
+#ifdef _CMPLX
+    complex(8)                     :: corr,Otmp
+    complex(8),allocatable         :: Ov(:)
+#else
+    real(8)                        :: corr,Otmp
+    real(8),allocatable            :: Ov(:)
+#endif
+    type(sparse_matrix)            :: Al,Br
+    real(8),allocatable            :: qrow(:),qcol(:)
+    integer                        :: irow,icol
+    real(8),parameter              :: dq_tol=100d0*epsilon(1d0)
+    !
+    if(any(abs(dqLeft+dqRight)>dq_tol))then
+       corr=zero
+       return
+    endif
+    allocate(Ov(size(gs_vector,1)));Ov=zero
+    !
+    do irow=1,Nsb
+       qrow=sb_sector%qn(index=irow)
+       qcol=qrow-dqLeft
+       if(.not.sb_sector%has_qn(qcol))cycle
+       icol=sb_sector%index(qn=qcol)
+       !Rows belong to the output sector irow and columns to the input
+       !sector icol. The inverse maps make both blocks rectangular.
+       Al=sp_filter(Oleft,LI(irow)%states,Lmap(icol)%states,&
+            size(LI(icol)%states))
+       Br=sp_filter(Oright,RI(irow)%states,Rmap(icol)%states,&
+            size(RI(icol)%states))
+#ifdef _MPI
+       if(MpiStatus)then
+          call Apply_AxB_Measure_MPI(Al,Br,irow,icol,gs_vector(:,1),Ov)
+       else
+          call Apply_AxB_Measure(Al,Br,Offset(irow),Offset(icol),gs_vector(:,1),Ov)
+       endif
+#else
+       call Apply_AxB_Measure(Al,Br,Offset(irow),Offset(icol),gs_vector(:,1),Ov)
+#endif
+       call Al%free()
+       call Br%free()
+    enddo
+    !
+#ifdef _MPI
+    if(MpiStatus)then
+       Otmp=dot_product(gs_vector(:,1),Ov)
+       corr=zero
+       call AllReduce_MPI(MpiComm,Otmp,corr)
+    else
+       corr=dot_product(gs_vector(:,1),Ov)
+    endif
+#else
+    corr=dot_product(gs_vector(:,1),Ov)
+#endif
+    deallocate(Ov)
+  end function Average_Corr_LR_DMRG
+
+
+
+
+  !Apply a rectangular tensor product A x B from col_offset to
+  !row_offset. Superblock vectors use the right index as the fast index.
+  subroutine Apply_AxB_Measure(Aop,Bop,row_offset,col_offset,v,Ov)
+    type(sparse_matrix),intent(in) :: Aop,Bop
+    integer,intent(in)             :: row_offset,col_offset
+#ifdef _CMPLX
+    complex(8),intent(in)          :: v(:)
+    complex(8),intent(inout)       :: Ov(:)
+    complex(8),allocatable         :: C(:,:)
+    complex(8)                     :: val
+#else
+    real(8),intent(in)             :: v(:)
+    real(8),intent(inout)          :: Ov(:)
+    real(8),allocatable            :: C(:,:)
+    real(8)                        :: val
+#endif
+    integer                        :: ai,aj,bi,bj,ja,jb,jc,i,j
+    !
+    if(.not.Aop%status.OR..not.Bop%status)return
+    allocate(C(Bop%Nrow,Aop%Ncol));C=zero
+    do aj=1,Aop%Ncol
+       do bi=1,Bop%Nrow
+          do jb=1,Bop%row(bi)%Size
+             bj=Bop%row(bi)%cols(jb)
+             val=Bop%row(bi)%vals(jb)
+             jc=bj+(aj-1)*Bop%Ncol
+             j=jc+col_offset
+             C(bi,aj)=C(bi,aj)+val*v(j)
+          enddo
+       enddo
+    enddo
+    do bi=1,Bop%Nrow
+       do ai=1,Aop%Nrow
+          i=bi+(ai-1)*Bop%Nrow+row_offset
+          do ja=1,Aop%row(ai)%Size
+             aj=Aop%row(ai)%cols(ja)
+             val=Aop%row(ai)%vals(ja)
+             Ov(i)=Ov(i)+val*C(bi,aj)
+          enddo
+       enddo
+    enddo
+    deallocate(C)
+  end subroutine Apply_AxB_Measure
+
+
+
+#ifdef _MPI
+  !Distributed version of Apply_AxB_Measure. The intermediate matrix is
+  !transposed between the left- and right-distributed layouts exactly as
+  !in the direct superblock H*v implementation.
+  subroutine Apply_AxB_Measure_MPI(Aop,Bop,k,q,v,Ov)
+    type(sparse_matrix),intent(in) :: Aop,Bop
+    integer,intent(in)             :: k,q
+#ifdef _CMPLX
+    complex(8),intent(in)          :: v(:)
+    complex(8),intent(inout)       :: Ov(:)
+    complex(8),allocatable         :: C(:,:),Ct(:,:),vt(:),Ovt(:)
+    complex(8)                     :: val
+#else
+    real(8),intent(in)             :: v(:)
+    real(8),intent(inout)          :: Ov(:)
+    real(8),allocatable            :: C(:,:),Ct(:,:),vt(:),Ovt(:)
+    real(8)                        :: val
+#endif
+    integer                        :: ai,aj,bi,bj,ja,jb,jc,i,j
+    integer                        :: mpiArow,mpiAcol,mpiBrow
+    integer                        :: abcomm,i_start,i_end
+    !
+    if(.not.Aop%status.OR..not.Bop%status)return
+    mpiAcol=mpiDls(q)
+    mpiArow=mpiDls(k)
+    mpiBrow=mpiDrs(k)
+    allocate(C(Bop%Nrow,mpiAcol));C=zero
+    do aj=1,mpiAcol
+       do bi=1,Bop%Nrow
+          do jb=1,Bop%row(bi)%Size
+             bj=Bop%row(bi)%cols(jb)
+             val=Bop%row(bi)%vals(jb)
+             jc=bj+(aj-1)*Bop%Ncol
+             j=jc+mpiOffset(q)
+             C(bi,aj)=C(bi,aj)+val*v(j)
+          enddo
+       enddo
+    enddo
+    !Use the larger active communicator while changing distribution.
+    if(mpiNactive(q)>mpiNactive(k))then
+       abcomm=mpiSBCOMM(q)
+    else
+       abcomm=mpiSBCOMM(k)
+    endif
+    allocate(Ct(Aop%Ncol,mpiBrow));Ct=zero
+    call vector_transpose_MPI(Bop%Nrow,mpiAcol,C,Aop%Ncol,mpiBrow,Ct,abcomm)
+    allocate(Ovt(Aop%Nrow*mpiBrow));Ovt=zero
+    do bi=1,mpiBrow
+       do ai=1,Aop%Nrow
+          i=ai+(bi-1)*Aop%Nrow
+          do ja=1,Aop%row(ai)%Size
+             aj=Aop%row(ai)%cols(ja)
+             val=Aop%row(ai)%vals(ja)
+             Ovt(i)=Ovt(i)+val*Ct(aj,bi)
+          enddo
+       enddo
+    enddo
+    allocate(vt(Bop%Nrow*mpiArow));vt=zero
+    call vector_transpose_MPI(Aop%Nrow,mpiBrow,Ovt,Bop%Nrow,mpiArow,vt,mpiSBCOMM(k))
+    i_start=1+mpiOffset(k)
+    i_end=Bop%Nrow*mpiArow+mpiOffset(k)
+    Ov(i_start:i_end)=Ov(i_start:i_end)+vt
+    deallocate(C,Ct,vt,Ovt)
+  end subroutine Apply_AxB_Measure_MPI
+#endif
+
+
   
 
 
@@ -380,7 +1180,11 @@ contains
     !i = M(pos)
     !recall that M: OBC: 1+2+...Ldmrg-2+Ldmrg-1+Ldmrg
     !               PBC: Ldmrg+Ldmrg-2..+1+..+Ldmrg-1
-    i=b2gMap(pos)    ; if(pos>L)i=b2gMap(N+1-pos)
+    if(pos<=L)then
+       i=b2gMap(pos)
+    else
+       i=b2gMap(N+1-pos)
+    endif
     !
     !Build Operator on the chain at position pos:   
     if(i==1)then
@@ -495,7 +1299,11 @@ contains
     label='l'; if(pos>L)label='r'
     !
     !Get index in the block from the position pos in the chain:
-    i=b2gMap(pos)    ; if(pos>L)i=b2gMap(N+1-pos)
+    if(pos<=L)then
+       i=b2gMap(pos)
+    else
+       i=b2gMap(N+1-pos)
+    endif
     !
     istart  = i
     select case(label)
@@ -595,7 +1403,11 @@ contains
     label='l'; if(pos>L)label='r'
     !
     !Get index in the block from the position pos in the chain:
-    i=b2gMap(pos)    ; if(pos>L)i=b2gMap(N+1-pos)
+    if(pos<=L)then
+       i=b2gMap(pos)
+    else
+       i=b2gMap(N+1-pos)
+    endif
     !
     istart  = i
     select case(label)

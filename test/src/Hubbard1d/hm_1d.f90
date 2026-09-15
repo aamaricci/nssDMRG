@@ -12,14 +12,27 @@ program hubbard_1d
   integer                                        :: i,unit,iorb,ispin,L
   real(8)                                        :: ts(2),Mh(2)
   type(site),dimension(:),allocatable            :: MyDot
-  real(8),dimension(:,:),allocatable             :: Hloc,Hlr
+  real(8),dimension(:,:),allocatable             :: Hloc
+#ifdef _CMPLX
+  complex(8),dimension(:,:),allocatable          :: Hlr
+#else
+  real(8),dimension(:,:),allocatable             :: Hlr
+#endif
   type(sparse_matrix),dimension(:,:),allocatable :: Nop,Cop
   type(sparse_matrix),dimension(:),allocatable   :: dens,docc,s2z
+  type(sparse_matrix)                            :: C,Cdg
+  real(8),dimension(:),allocatable               :: dqC
   real(8),dimension(:,:),allocatable             :: avO
   real(8),dimension(:),allocatable               :: x,data,data_
   real(8),dimension(:),allocatable               :: n,d,m,e,s
+#ifdef _CMPLX
+  complex(8)                                     :: Gii,Gll,Gll_,Glr,Glr_,Alr
+#else
+  real(8)                                        :: Gii,Gll,Gll_,Glr,Glr_,Alr
+#endif
+  real(8)                                        :: nii
   integer                             :: irank,comm,rank,ierr
-  logical                             :: master
+  logical                             :: master=.true.
 
 #ifdef _MPI  
   call init_MPI()
@@ -75,6 +88,37 @@ program hubbard_1d
 
 
   call Measure_DMRG([dens,docc,s2z],pos=arange(1,Ldmrg),avOp=avO)
+
+
+  !Odd-fermion correlations. Each two-point function is parity even,
+  !but its representation contains the Jordan-Wigner string between
+  !the two endpoints. Test equal-site composition, hermiticity and the
+  !anticommutation sign, both within one block and across the L/R cut.
+  C   = myDot(1)%operators%op(key="C"//myDot(1)%okey(1,1))
+  Cdg = C%dgr()
+  dqC = myDot(1)%operators%dq(key="C"//myDot(1)%okey(1,1))
+  Gii = Measure_Corr_DMRG(Cdg,-dqC,C,dqC,1,1,"fermionic","fermionic")
+  nii = Measure_Op_DMRG(Nop(1,1),1)
+  Gll = Measure_Corr_DMRG(Cdg,-dqC,C,dqC,1,2,"fermionic","fermionic")
+  Gll_= Measure_Corr_DMRG(Cdg,-dqC,C,dqC,2,1,"fermionic","fermionic")
+  Glr = Measure_Corr_DMRG(Cdg,-dqC,C,dqC,Ldmrg,Ldmrg+1,"fermionic","fermionic")
+  Glr_= Measure_Corr_DMRG(Cdg,-dqC,C,dqC,Ldmrg+1,Ldmrg,"fermionic","fermionic")
+  Alr = Measure_Corr_DMRG(C,dqC,Cdg,-dqC,Ldmrg+1,Ldmrg,"fermionic","fermionic")
+  if(master)then
+#ifdef _CMPLX
+     call assert(Gii,cmplx(nii,0d0,8),"equal-site <Cdg.C>",tol=1d-10)
+     call assert(Gll,conjg(Gll_),"same-block fermion hermiticity",tol=1d-10)
+     call assert(Glr,conjg(Glr_),"left/right fermion hermiticity",tol=1d-10)
+#else
+     call assert(Gii,nii,"equal-site <Cdg.C>",tol=1d-10)
+     call assert(Gll,Gll_,"same-block fermion hermiticity",tol=1d-10)
+     call assert(Glr,Glr_,"left/right fermion hermiticity",tol=1d-10)
+#endif
+     call assert(Alr,-Glr,"left/right fermion anticommutation",tol=1d-10)
+  endif
+  call C%free()
+  call Cdg%free()
+  call End_Measure_DMRG()
 
 
   if(master)then
@@ -140,9 +184,6 @@ program hubbard_1d
 
 
 end program hubbard_1d
-
-
-
 
 
 
