@@ -166,6 +166,15 @@ ADD_LIBRARY(dmrg STATIC
   )
 
 
+############################################################
+# Regression tests
+############################################################
+INCLUDE(CTest)
+IF(BUILD_TESTING)
+  ADD_SUBDIRECTORY(${LIB_TEST})
+ENDIF()
+
+
 
 
 SET(PERMISSION_777

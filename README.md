@@ -277,6 +277,43 @@ In the top-left panel we compare the energy per site $E(j)$ with respect to the 
 ![gif](https://github.com/aamaricci/Lattice_DMRG/blob/main/.plot/DMRG_record.gif)
 
 
+## Tests
+
+The regression tests perform complete DMRG runs from scratch and compare the resulting energies, entanglement entropies, local observables, nearest-neighbor correlations, and long-range correlations against trusted reference data. They currently cover the spin-$1/2$ and one-band Hubbard drivers.
+
+After configuring and building the project, run the complete test suite from the build directory with:
+
+```bash
+cmake ..
+cmake --build .
+ctest --output-on-failure
+```
+
+When using a Makefile generator, the last two commands can equivalently be written as:
+
+```bash
+cmake ..
+make
+make test
+```
+
+Individual DMRG regression tests can be selected with:
+
+```bash
+ctest -R dmrg_spin_regression --output-on-failure
+ctest -R dmrg_hubbard_regression --output-on-failure
+```
+
+Use `ctest -N` to list the registered tests and `ctest -V` to display their complete output. Test runs are performed in isolated working directories under:
+
+```text
+build/test/work/Spin1d_SU2
+build/test/work/Hubbard1d
+```
+
+The directories under `test/reference` contain the manual drivers, input files, and trusted numerical tables used to generate the reference data. These drivers are neither compiled nor executed by CMake. Once validated, the model input file and the resulting `*.check` tables must be copied manually to the corresponding directory under `test/src`. CMake stages the approved files from `test/src` into the isolated test working directories. After updating them, rerun `cmake ..` from the build directory before executing the tests again.
+
+
 ## Profiling
 The code contains a detailed profiling of  timing and parallel data communication for the crucial parts of the algorithm. The profiling output is regulated with the CMake configuration variable `PROFILE`.
 

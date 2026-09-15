@@ -186,8 +186,13 @@ contains
     call sb_delete_dims()
     if(.not.block_umat_cache)then   
       if(MpiMaster)then
-        Ileft  = id(left%Dim)
-        Iright = id(right%Dim)
+        !U(1) is the identity in the initial one-site block basis.  Do
+        !not use left/right%Dim here: at the end of a run those are the
+        !dimensions of the final enlarged blocks.  A subsequent call to
+        !Init_Measure_DMRG reloads U(2),...,U(L-1) and relies on U(1) to
+        !reconstruct operators on the first two growth sites.
+        Ileft  = id(init_left%Dim)
+        Iright = id(init_right%Dim)
         call left%omatrices%free()
         call right%omatrices%free()
         call left%put_omat("1",Ileft)
@@ -597,11 +602,10 @@ contains
     character(:),allocatable :: key
     integer                  :: io,jo,iorb,ispin,Nso
     !
+    corr=zero
     if(.not.measure_status)call Init_Measure_DMRG()
-    if(.not.measure_status)then
-       corr=zero
-       return
-    endif
+    if(.not.measure_status)return
+    !
     Nso=Nspin*Norb
     allocate(dq0(size(current_target_qn)));dq0=0d0
     do io=1,Nso
@@ -624,6 +628,10 @@ contains
           corr(io,jo)=Measure_Corr_ops_DMRG(NopA(io),dq0,NopB(jo),dq0,&
                posA,posB,"bosonic","bosonic",connected)
        enddo
+    enddo
+    !Every NopB(jo) is used by every row io.  Freeing NopB(io) inside
+    !the preceding loop would invalidate it before the next row.
+    do io=1,Nso
        call NopA(io)%free()
        call NopB(io)%free()
     enddo

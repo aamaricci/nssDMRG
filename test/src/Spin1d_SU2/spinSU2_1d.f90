@@ -1,114 +1,101 @@
 program dmrg_spin_1d
   USE SCIFOR
   USE DMRG
-  USE ASSERTING
+  USE REGRESSION_UTILS
 #ifdef _MPI
   USE MPI
 #endif
   implicit none
-  character(len=64)                   :: finput
-  integer                             :: i,Unit,L
-  type(site),dimension(:),allocatable :: myDot
-  type(sparse_matrix)                 :: bSz,bSp,SiSj
+  character(len=64)                     :: finput
+  character(len=:),allocatable          :: run_label
+  integer                               :: i,j,unit,Nsites,comm
+  type(site),allocatable                :: MyDot(:)
+  type(sparse_matrix)                   :: Sz,Sz2
 #ifdef _CMPLX
-  complex(8),dimension(:,:),allocatable :: Hlr
+  complex(8),allocatable                :: Hlr(:,:)
+  complex(8)                            :: corr
 #else
-  real(8),dimension(:,:),allocatable    :: Hlr
+  real(8),allocatable                   :: Hlr(:,:)
+  real(8)                               :: corr
 #endif
-  real(8),dimension(:),allocatable    :: avSz,x,data,data_
-  real(8),dimension(:),allocatable    :: e,s
-#ifdef _CMPLX
-  complex(8)                          :: Sii,Sll,Sll_,Slr,Slr_
-#else
-  real(8)                             :: Sii,Sll,Sll_,Slr,Slr_
-#endif
-  integer                             :: irank,comm,rank,ierr
-  logical                             :: master
+  real(8),allocatable                   :: avSz(:),avSz2(:)
+  real(8),parameter                     :: atol=1d-8,rtol=1d-7
+  real(8),parameter                     :: observable_atol=1d-6
+  logical                               :: master=.true.
 
-#ifdef _MPI  
+#ifdef _MPI
   call init_MPI()
-  comm = MPI_COMM_WORLD
+  comm=MPI_COMM_WORLD
   call StartMsg_MPI(comm)
-  rank = get_Rank_MPI(comm)
-  master = get_Master_MPI(comm)
+  master=get_Master_MPI(comm)
 #endif
-
 
   call parse_cmd_variable(finput,"FINPUT",default='DMRG.conf')
   call read_input(finput)
-
-
-  !Init DMRG
-  allocate(MyDot(1))              !Homogeneous system
-  MyDot = spin_site(sun=2)        !spin_site handles array!
-  Hlr = diag([Jp,Jx/2d0])       !implicit fortran allocation
+  if(to_lower(DMRGtype)/='i')error stop "Spin regression test requires iDMRG"
+  run_label=label_DMRG(DMRGtype)
+  if(master)then
+     call remove_file("energyVSblock.length"//run_label)
+     call remove_file("SentropyVSblock.length"//run_label)
+     call remove_file("spin_local.out")
+     call remove_file("spin_nn.out")
+     call remove_file("spin_1j.out")
+  endif
+#ifdef _MPI
+  call MPI_BARRIER(comm,i)
+#endif
+  allocate(MyDot(1));MyDot=spin_site(sun=2)
+  Hlr=diag([Jp,Jx/2d0])
   call init_dmrg(Hlr,ModelDot=MyDot)
-
   call run_DMRG()
 
-  !Post-processing and measure quantities:
-  call Measure_DMRG(myDot(1)%operators%op(key="S"//myDot(1)%okey(0,1,ilink="n")),&
-       pos=arange(1,Ldmrg),avOp=avSz)
+  !The final iDMRG superblock contains two blocks of length Ldmrg.
+  Nsites=2*Ldmrg
+  Sz =MyDot(1)%operators%op(key="S"//MyDot(1)%okey(0,1,ilink="n"))
+  Sz2=matmul(Sz,Sz)
+  call Measure_DMRG(Sz ,pos=arange(1,Nsites),avOp=avSz)
+  call Measure_DMRG(Sz2,pos=arange(1,Nsites),avOp=avSz2)
 
-  !Generic static correlations: same site, same block and across the
-  !left/right superblock cut. The reversed correlators test both the
-  !growth-order construction and the sector-changing L/R contraction.
-  Sii  = Measure_SpinSpin_DMRG(1,1)
-  Sll  = Measure_SpinSpin_DMRG(1,2)
-  Sll_ = Measure_SpinSpin_DMRG(2,1)
-  Slr  = Measure_SpinSpin_DMRG(Ldmrg,Ldmrg+1)
-  Slr_ = Measure_SpinSpin_DMRG(Ldmrg+1,Ldmrg)
   if(master)then
-#ifdef _CMPLX
-     call assert(Sii,cmplx(0.75d0,0d0,8),"<S_i.S_i>",tol=1d-10)
-     call assert(Sll,conjg(Sll_),"same-block <S_i.S_j> symmetry",tol=1d-10)
-     call assert(Slr,conjg(Slr_),"left/right <S_i.S_j> symmetry",tol=1d-10)
-#else
-     call assert(Sii,0.75d0,"<S_i.S_i>",tol=1d-10)
-     call assert(Sll,Sll_,"same-block <S_i.S_j> symmetry",tol=1d-10)
-     call assert(Slr,Slr_,"left/right <S_i.S_j> symmetry",tol=1d-10)
-#endif
+     open(newunit=unit,file="spin_local.out",status="replace")
+     do i=1,Nsites
+        write(unit,*)i,avSz(i),avSz2(i)
+     enddo
+     close(unit)
+     open(newunit=unit,file="spin_nn.out",status="replace")
   endif
+  do i=1,Nsites-1
+     corr=Measure_SpinSpin_DMRG(i,i+1)
+     if(master)write(unit,*)i,i+1,real(corr,8)
+#ifdef _CMPLX
+     if(abs(aimag(corr))>atol)error stop "spin_nn ERROR: non-real correlation"
+#endif
+  enddo
+  if(master)then
+     close(unit)
+     open(newunit=unit,file="spin_1j.out",status="replace")
+  endif
+  do j=1,Nsites
+     corr=Measure_SpinSpin_DMRG(1,j)
+     if(master)write(unit,*)1,j,real(corr,8)
+#ifdef _CMPLX
+     if(abs(aimag(corr))>atol)error stop "spin_1j ERROR: non-real correlation"
+#endif
+  enddo
+  if(master)close(unit)
   call End_Measure_DMRG()
 
   if(master)then
-     !Check energy:
-     L = file_length("energyVSleft.length_L40_M20_iDMRG.dmrg")
-     allocate(x(L),data(L))
-     call sread("energyVSleft.length_L40_M20_iDMRG.dmrg",x,data)
-     L = file_length("energy.check")
-     deallocate(x)
-     allocate(x(L),data_(L))
-     call sread("energy.check",x,data_)
-     if(size(data)/=size(data_))stop "Energy files have different sizes"
-     call assert(data,data_,"E")
-     deallocate(x,data,data_)
-     !
-     L = file_length("sz.check")
-     allocate(data_(L))
-     call read_array("sz.check",data_)
-     if(size(avSz)/=size(data_))stop "Sz files have different sizes"
-     call assert(avSz,data_,"Sz",tol=1d-8)
-     deallocate(avSz,data_)
-     !
-     ! L = file_length("SentropyVSleft.length_L40_M20_iDMRG.dmrg")
-     ! allocate(x(L),data(L))
-     ! call sread("SentropyVSleft.length_L40_M20_iDMRG.dmrg",x,data)
-     ! L = file_length("Sentropy.check")
-     ! allocate(data_(L))
-     ! call read_array("Sentropy.check",data_)
-     ! if(size(data)/=size(data_))stop "Sentropy files have different sizes"
-     ! call assert(data,data_,"S")
-     ! deallocate(x,data,data_)
-     !
+     call assert_table("energy.check","energyVSblock.length"//run_label,3,atol,rtol)
+     call assert_table("entropy.check","SentropyVSblock.length"//run_label,4,atol,rtol)
+     call assert_table("spin_local.check","spin_local.out",3,observable_atol,rtol)
+     call assert_table("spin_nn.check","spin_nn.out",3,observable_atol,rtol)
+     call assert_table("spin_1j.check","spin_1j.out",3,observable_atol,rtol)
   endif
 
-
-  !Finalize DMRG
+  call Sz%free();call Sz2%free()
   call finalize_dmrg()
 #ifdef _MPI
   call finalize_MPI()
 #endif
-
-
 end program dmrg_spin_1d

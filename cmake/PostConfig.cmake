@@ -65,17 +65,6 @@ INSTALL(DIRECTORY ${LIB_TARGET_ETC}/modules/ DESTINATION $ENV{HOME}/.modules.d)
 
 
 
-IF(NOT TARGET test)
-  ADD_CUSTOM_TARGET(test
-    COMMAND ${CMAKE_COMMAND} -E echo "Compiling test..."
-    COMMAND ${CMAKE_MAKE_PROGRAM} -C ${LIB_TEST} all
-    COMMAND ${CMAKE_COMMAND} -E echo "Running test..."
-    COMMAND ${CMAKE_MAKE_PROGRAM} -C ${LIB_TEST} test 
-  )
-ENDIF()
-
-
-
 get_filename_component(BARE_MAKE_PROGRAM ${CMAKE_MAKE_PROGRAM} NAME)
 MESSAGE( STATUS "${Red}Library version:${ColourReset} ${VERSION}")
 MESSAGE( STATUS "${Red}Library will be installed in:${ColourReset} ${CMAKE_INSTALL_PREFIX}")
