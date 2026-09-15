@@ -346,6 +346,10 @@ exact diagonalization of strongly correlated systems](https://juser.fz-juelich.d
 <a id="4">[4]</a> 
 [Density-matrix algorithms for quantum renormalization groups](https://journals.aps.org/prb/abstract/10.1103/PhysRevB.48.10345), S.White, Phys. Rev. B **48**, 10345 (1993).
 
+<a id="5">[5]</a> 
+[Entanglement-informed distributed wavefunction approach to scalable quantum
+many-body systems](https://arxiv.org/abs/2605.07621), A.Amaricci, arXiv:2605.07621 (2026).
+
 
 
 --
