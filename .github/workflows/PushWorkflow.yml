@@ -4,6 +4,7 @@
 #
 name: CI DMRG workflow 
 
+
 on: 
   push:
     branches:
@@ -19,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
 
     steps:
 
@@ -33,20 +34,14 @@ jobs:
         with:
           pack-type: open
 
-
-
-#********* BUILD PART **********
-
 # Build SciFortran
-      - name: Cloning SciFortran
-        run: git clone https://github.com/aamaricci/SciFortran.git scifor
-      - name: Install SciFortran
-        run: scifor/bin/ci_setup_scifor.sh
+      - id: scifor
+        uses: SciFortran/checkout@main
 
 # Build DMRG
       - name: Cloning DMRG
-        run: git clone https://github.com/aamaricci/Lattice_DMRG.git Lattice_DMRG
-      - name: Install Lattice_DMRG
+        run: git clone https://github.com/aamaricci/nssDMRG.git nssDMRG
+      - name: Install nssDMRG
         run: |
           source ~/.scifor_config_user
           export PKG_CONFIG_PATH=~/.pkgconfig.d
