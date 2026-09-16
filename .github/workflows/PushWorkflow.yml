@@ -4,7 +4,6 @@
 #
 name: CI DMRG workflow 
 
-
 on: 
   push:
     branches:
@@ -20,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-22.04, macos-14]
 
     steps:
 
@@ -34,13 +33,15 @@ jobs:
         with:
           pack-type: open
 
+
+
+#********* BUILD PART **********
+
 # Build SciFortran
-      - id: scifor
-        uses: SciFortran/checkout@main
-      - name: Build dependent project
-        run: |
-          echo "Using SciFortran ${{ steps.scifor.outputs.release }}"
-          make
+      - name: Cloning SciFortran
+        run: git clone https://github.com/aamaricci/SciFortran.git scifor
+      - name: Install SciFortran
+        run: scifor/bin/ci_setup_scifor.sh
 
 # Build DMRG
       - name: Cloning DMRG
