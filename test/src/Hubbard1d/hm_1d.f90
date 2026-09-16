@@ -18,8 +18,9 @@ program hubbard_1d
   real(8),allocatable                            :: Hlr(:,:),corr(:,:)
 #endif
   type(sparse_matrix),allocatable                :: Cop(:,:),Nop(:,:)
-  type(sparse_matrix)                            :: Docc
+  type(sparse_matrix)                            :: Docc,Kij,Hi
   real(8),allocatable                            :: avLocal(:,:),values(:)
+  real(8)                                        :: Ekin,Eloc,Etotal
   real(8),parameter                              :: atol=1d-8,rtol=1d-7
   real(8),parameter                              :: observable_atol=1d-6
   logical                                        :: master=.true.
@@ -94,6 +95,8 @@ program hubbard_1d
      if(master)write(unit,*)1,j,values
   enddo
   if(master)close(unit)
+  call Measure_Energy_DMRG(Hlr,Ekin,Eloc,Etotal,Kij,Hi)
+  if(master)write(*,*)"Measured energies [Ekin,Eloc,Etotal]:",Ekin,Eloc,Etotal
   call End_Measure_DMRG()
 
   if(master)then
@@ -111,6 +114,8 @@ program hubbard_1d
      enddo
   enddo
   call Docc%free()
+  call Kij%free()
+  call Hi%free()
   call finalize_dmrg()
 #ifdef _MPI
   call finalize_MPI()

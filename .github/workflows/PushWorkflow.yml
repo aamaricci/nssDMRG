@@ -33,15 +33,13 @@ jobs:
         with:
           pack-type: open
 
-
-
-#********* BUILD PART **********
-
 # Build SciFortran
-      - name: Cloning SciFortran
-        run: git clone https://github.com/aamaricci/SciFortran.git scifor
-      - name: Install SciFortran
-        run: scifor/bin/ci_setup_scifor.sh
+      - id: scifor
+        uses: SciFortran/checkout@main
+      - name: Build dependent project
+        run: |
+          echo "Using SciFortran ${{ steps.scifor.outputs.release }}"
+          make
 
 # Build DMRG
       - name: Cloning DMRG

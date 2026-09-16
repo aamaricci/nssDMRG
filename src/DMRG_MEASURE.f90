@@ -17,8 +17,16 @@ module DMRG_MEASURE
   public :: Advance_Corr_DMRG
   public :: Average_Op_DMRG
   public :: Measure_Corr_DMRG
-  public :: Measure_SpinSpin_DMRG
-  public :: Measure_DensityDensity_DMRG
+  !Predefined procedures:
+  public :: Measure_SpinSpin_DMRG          !get the spin-spin correlation ("s")
+  public :: Measure_DensityDensity_DMRG    !get the density-density correlation ("f")
+  public :: Measure_FermionBond_DMRG       !get the fermion bond energy E_ij=\sum_ab <t_ijab c_ai.c_bj>+h.c.
+  public :: Measure_KineticEnergy_DMRG     !get the kinetic energy sum_ij E_ij
+  public :: Measure_SpinBond_DMRG          !get the spin bond energy E_ij= H.<S_i.S_j>
+  public :: Measure_SpinExchangeEnergy_DMRG!get the spin-exchange energy sum_ij E_ij
+  public :: Measure_LocalEnergy_DMRG       !get the local energy <H_i> (contains interaction and local terms: crystal field, external fields, etc.)
+  public :: Measure_Energy_DMRG            !a convenience wrapper returning Etotal and partial Ebond+Eloc
+  !
   public :: Write_DMRG
 
   interface Measure_Corr_DMRG
@@ -636,6 +644,389 @@ contains
        call NopB(io)%free()
     enddo
   end function Measure_DensityDensity_DMRG
+
+
+
+
+  !##################################################################
+  !                 MEASURE ENERGY COMPONENTS
+  !##################################################################
+  !> Return the expectation value of one fermionic hopping bond,
+  !> using exactly the convention employed by connect_fermion_blocks:
+  !> \f[ K_{ij}=\sum_{ab}\left[
+  !> H_{ab}\langle c^\dagger_{ia}c_{jb}\rangle+
+  !> H_{ab}^*\langle c^\dagger_{jb}c_{ia}\rangle\right]. \f]
+  !> Measure_Corr_ops_DMRG supplies all Jordan--Wigner strings, also
+  !> when the two endpoints belong to different DMRG blocks.
+  !>
+  !> Hij acts in the compound spin-orbital space
+  !> \f$a=i_{orb}+(i_{spin}-1)N_{orb}\f$.  Only the directed correlator
+  !> \f$G_{ab}(i,j)=\langle c^\dagger_{ia}c_{jb}\rangle\f$ is evaluated;
+  !> its Hermitian conjugate is added analytically at the end.
+  function Measure_FermionBond_DMRG(posA,posB,Hij) result(Eij)
+    integer,intent(in)                    :: posA,posB
+#ifdef _CMPLX
+    complex(8),intent(in)                 :: Hij(:,:)
+    complex(8)                            :: corr,Ebond
+#else
+    real(8),intent(in)                    :: Hij(:,:)
+    real(8)                               :: corr,Ebond
+#endif
+    real(8)                               :: Eij
+    type(sparse_matrix)                   :: Ca,Cb,Cdag
+    real(8),allocatable                   :: dqA(:),dqB(:)
+    character(len=:),allocatable          :: key
+    integer                               :: io,jo,iorb,jorb,ispin,jspin,N,Nso
+    real(8),parameter                     :: imag_tol=1d-10
+    !
+    Eij=0d0
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    !
+    N=left%length+right%length
+    Nso=Nspin*Norb
+    if(posA<1.OR.posA>N)stop "Measure_FermionBond_DMRG ERROR: posA not in [1,Nsites]"
+    if(posB<1.OR.posB>N)stop "Measure_FermionBond_DMRG ERROR: posB not in [1,Nsites]"
+    if(posA==posB)stop "Measure_FermionBond_DMRG ERROR: equal positions"
+    if(size(Hij,1)/=Nso.OR.size(Hij,2)/=Nso)&
+         stop "Measure_FermionBond_DMRG ERROR: shape(Hij) != [Nso,Nso]"
+    if(dot(posA)%SiteType(1:1)/="F".AND.dot(posA)%SiteType(1:1)/="f")&
+         stop "Measure_FermionBond_DMRG ERROR: posA is not a fermion site"
+    if(dot(posB)%SiteType(1:1)/="F".AND.dot(posB)%SiteType(1:1)/="f")&
+         stop "Measure_FermionBond_DMRG ERROR: posB is not a fermion site"
+    !
+    !Accumulate one oriented half of the bond Hamiltonian:
+    !  Ebond = sum_ab Hij(a,b) <C^+_a(posA) C_b(posB)>.
+    !The conjugate half is not measured separately.
+    Ebond=zero
+    do io=1,Nso
+       !Convert the flattened index io to the site key convention.
+       iorb=mod(io-1,Norb)+1
+       ispin=(io-1)/Norb+1
+       key="C"//dot(posA)%okey(iorb,ispin,ilink="n")
+       if(.not.dot(posA)%operators%has_key(key))&
+            stop "Measure_FermionBond_DMRG ERROR: missing C operator at posA"
+       Ca=dot(posA)%operators%op(key)
+       dqA=dot(posA)%operators%dq(key)
+       !If dq(C) is the annihilation shift, dq(C^+)=-dq(C).
+       Cdag=hconjg(Ca)
+       !
+       do jo=1,Nso
+          !A zero hopping does not contribute and requires no operator
+          !construction or many-body contraction.
+          if(Hij(io,jo)==zero)cycle
+          jorb=mod(jo-1,Norb)+1
+          jspin=(jo-1)/Norb+1
+          key="C"//dot(posB)%okey(jorb,jspin,ilink="n")
+          if(.not.dot(posB)%operators%has_key(key))&
+               stop "Measure_FermionBond_DMRG ERROR: missing C operator at posB"
+          Cb=dot(posB)%operators%op(key)
+          dqB=dot(posB)%operators%dq(key)
+          !
+          !This call handles same-block/LR cases and inserts the full
+          !Jordan--Wigner string required by the two odd operators.
+          corr=Measure_Corr_ops_DMRG(Cdag,-dqA,Cb,dqB,posA,posB,&
+               "fermionic","fermionic")
+          Ebond=Ebond+Hij(io,jo)*corr
+          !
+          call Cb%free()
+       enddo
+       call Ca%free()
+       call Cdag%free()
+    enddo
+    !The second hopping direction is the Hermitian conjugate of the
+    !first one.  Forming 2 Re[...] avoids a redundant DMRG contraction.
+#ifdef _CMPLX
+    if(abs(aimag(Ebond))>imag_tol*max(1d0,abs(real(Ebond,8))))then
+       if(MpiMaster)write(LOGfile,*)"Measure_FermionBond_DMRG WARNING: finite imaginary directed bond",aimag(Ebond)
+    endif
+    Eij=2d0*real(Ebond,8)
+#else
+    Eij=2d0*Ebond
+#endif
+  end function Measure_FermionBond_DMRG
+
+
+
+
+  !> Return the total kinetic energy for the uniform nearest-neighbour
+  !> hopping matrix Hij.  If requested, Kij contains one entry per
+  !> physical bond in the upper triangle, so that no bond is counted
+  !> twice and Ekin is the sum of its stored values.
+  !>
+  !> Present implementation: the same Hij is used on every nearest-
+  !> neighbour bond.  The sparse output is deliberately site-resolved
+  !> so that a later MATRIX_GRAPH implementation can preserve this API.
+  function Measure_KineticEnergy_DMRG(Hij,Kij) result(Ekin)
+#ifdef _CMPLX
+    complex(8),intent(in)                    :: Hij(:,:)
+#else
+    real(8),intent(in)                       :: Hij(:,:)
+#endif
+    type(sparse_matrix),optional,intent(out) :: Kij
+    real(8)                                  :: Ekin,Eij
+    integer                                  :: i,N
+    !
+    Ekin=0d0
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    N=left%length+right%length
+    if(present(Kij))call Kij%init(N,N)
+    !
+    !Open-chain bonds: (1,2),...,(N-1,N).
+    do i=1,N-1
+       Eij=Measure_FermionBond_DMRG(i,i+1,Hij)
+       Ekin=Ekin+Eij
+       if(present(Kij))then
+          if(Eij/=0d0)then
+#ifdef _CMPLX
+             call Kij%insert(cmplx(Eij,0d0,8),i,i+1)
+#else
+             call Kij%insert(Eij,i,i+1)
+#endif
+          endif
+       endif
+    enddo
+    !The boundary bond is stored as (1,N), preserving the same
+    !upper-triangular convention used for all open-chain bonds.
+    if(PBCdmrg)then
+       Eij=Measure_FermionBond_DMRG(1,N,Hij)
+       Ekin=Ekin+Eij
+       if(present(Kij))then
+          if(Eij/=0d0)then
+#ifdef _CMPLX
+             call Kij%insert(cmplx(Eij,0d0,8),1,N)
+#else
+             call Kij%insert(Eij,1,N)
+#endif
+          endif
+       endif
+    endif
+  end function Measure_KineticEnergy_DMRG
+
+
+
+
+  !> Return the spin-exchange energy of one bond, with the same
+  !> convention used by connect_spin_blocks:
+  !> \f[ J_{ij}=H_{11}\langle S_i^zS_j^z\rangle+
+  !> H_{22}\langle S_i^+S_j^-\rangle+
+  !> H_{22}^*\langle S_i^-S_j^+\rangle. \f]
+  !>
+  !> In the site convention, component 1 is Sz and component 2 is S+.
+  !> The current spin Hamiltonian accepts only diagonal Hij: Hij(1,1)
+  !> is the longitudinal coupling and Hij(2,2) the transverse one.
+  function Measure_SpinBond_DMRG(posA,posB,Hij) result(Eij)
+    integer,intent(in)                    :: posA,posB
+#ifdef _CMPLX
+    complex(8),intent(in)                 :: Hij(:,:)
+    complex(8)                            :: corrzz,corrpm,Ediag,Etrans
+#else
+    real(8),intent(in)                    :: Hij(:,:)
+    real(8)                               :: corrzz,corrpm,Ediag,Etrans
+#endif
+    real(8)                               :: Eij
+    type(sparse_matrix)                   :: SzA,SzB,SpA,SpB,SmB
+    real(8),allocatable                   :: dqzA(:),dqzB(:),dqpA(:),dqpB(:)
+    character(len=:),allocatable          :: key
+    integer                               :: N
+    real(8),parameter                     :: imag_tol=1d-10
+    !
+    Eij=0d0
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    !
+    N=left%length+right%length
+    if(posA<1.OR.posA>N)stop "Measure_SpinBond_DMRG ERROR: posA not in [1,Nsites]"
+    if(posB<1.OR.posB>N)stop "Measure_SpinBond_DMRG ERROR: posB not in [1,Nsites]"
+    if(posA==posB)stop "Measure_SpinBond_DMRG ERROR: equal positions"
+    if(size(Hij,1)/=2.OR.size(Hij,2)/=2)&
+         stop "Measure_SpinBond_DMRG ERROR: shape(Hij) != [2,2]"
+    if(dot(posA)%SiteType(1:1)/="S".AND.dot(posA)%SiteType(1:1)/="s")&
+         stop "Measure_SpinBond_DMRG ERROR: posA is not a spin site"
+    if(dot(posB)%SiteType(1:1)/="S".AND.dot(posB)%SiteType(1:1)/="s")&
+         stop "Measure_SpinBond_DMRG ERROR: posB is not a spin site"
+    if(Hij(1,2)/=zero.OR.Hij(2,1)/=zero)&
+         stop "Measure_SpinBond_DMRG ERROR: off-diagonal spin Hij is not implemented"
+    !
+    !Load Sz and S+ together with their physical quantum-number shifts.
+    !S- is obtained by Hermitian conjugation and has shift -dq(S+).
+    key="S"//dot(posA)%okey(0,1,ilink="n")
+    SzA=dot(posA)%operators%op(key);dqzA=dot(posA)%operators%dq(key)
+    key="S"//dot(posB)%okey(0,1,ilink="n")
+    SzB=dot(posB)%operators%op(key);dqzB=dot(posB)%operators%dq(key)
+    key="S"//dot(posA)%okey(0,2,ilink="n")
+    SpA=dot(posA)%operators%op(key);dqpA=dot(posA)%operators%dq(key)
+    key="S"//dot(posB)%okey(0,2,ilink="n")
+    SpB=dot(posB)%operators%op(key);dqpB=dot(posB)%operators%dq(key)
+    SmB=hconjg(SpB)
+    !
+    !Measure one longitudinal and one directed transverse correlator.
+    !The S-_i S+_j contribution is the Hermitian conjugate of the
+    !transverse term and is added below as twice its real part.
+    corrzz=Measure_Corr_ops_DMRG(SzA,dqzA,SzB,dqzB,posA,posB,&
+         "bosonic","bosonic")
+    corrpm=Measure_Corr_ops_DMRG(SpA,dqpA,SmB,-dqpB,posA,posB,&
+         "bosonic","bosonic")
+    Ediag=Hij(1,1)*corrzz
+    Etrans=Hij(2,2)*corrpm
+#ifdef _CMPLX
+    if(abs(aimag(Ediag))>imag_tol*max(1d0,abs(real(Ediag,8))))then
+       if(MpiMaster)write(LOGfile,*)"Measure_SpinBond_DMRG WARNING: finite imaginary Sz.Sz bond",aimag(Ediag)
+    endif
+    Eij=real(Ediag,8)+2d0*real(Etrans,8)
+#else
+    Eij=Ediag+2d0*Etrans
+#endif
+    !
+    call SzA%free();call SzB%free()
+    call SpA%free();call SpB%free();call SmB%free()
+  end function Measure_SpinBond_DMRG
+
+
+
+
+  !> Sum the uniform spin-exchange Hamiltonian over all physical bonds.
+  !> If requested, Jij stores each bond energy once in the upper triangle.
+  !> Thus Espin is the sum of the stored Jij values, without a factor 1/2.
+  function Measure_SpinExchangeEnergy_DMRG(Hij,Jij) result(Espin)
+#ifdef _CMPLX
+    complex(8),intent(in)                    :: Hij(:,:)
+#else
+    real(8),intent(in)                       :: Hij(:,:)
+#endif
+    type(sparse_matrix),optional,intent(out) :: Jij
+    real(8)                                  :: Espin,Eij
+    integer                                  :: i,N
+    !
+    Espin=0d0
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    N=left%length+right%length
+    if(present(Jij))call Jij%init(N,N)
+    !
+    !Use the same bond enumeration and sparse storage convention as
+    !Measure_KineticEnergy_DMRG.
+    do i=1,N-1
+       Eij=Measure_SpinBond_DMRG(i,i+1,Hij)
+       Espin=Espin+Eij
+       if(present(Jij).AND.Eij/=0d0)then
+#ifdef _CMPLX
+          call Jij%insert(cmplx(Eij,0d0,8),i,i+1)
+#else
+          call Jij%insert(Eij,i,i+1)
+#endif
+       endif
+    enddo
+    if(PBCdmrg)then
+       Eij=Measure_SpinBond_DMRG(1,N,Hij)
+       Espin=Espin+Eij
+       if(present(Jij).AND.Eij/=0d0)then
+#ifdef _CMPLX
+          call Jij%insert(cmplx(Eij,0d0,8),1,N)
+#else
+          call Jij%insert(Eij,1,N)
+#endif
+       endif
+    endif
+  end function Measure_SpinExchangeEnergy_DMRG
+
+
+
+
+  !> Measure the complete local Hamiltonian stored with key "H" on
+  !> every site.  No split between quadratic and interacting local
+  !> terms is attempted at this stage.  If requested, Hi is diagonal
+  !> and stores each individual contribution <H_i>.
+  !>
+  !> "H" is the operator constructed by spin_site/electron_site and may
+  !> contain fields, crystal-field terms and local interactions.  Since
+  !> those contributions are already combined, this routine intentionally
+  !> makes no attempt to separate quadratic and interacting pieces.
+  function Measure_LocalEnergy_DMRG(Hi) result(Eloc)
+    type(sparse_matrix),optional,intent(out) :: Hi
+    real(8)                                  :: Eloc,Ei
+    type(sparse_matrix)                      :: Hsite
+    integer                                  :: i,N
+    !
+    Eloc=0d0
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    N=left%length+right%length
+    if(present(Hi))call Hi%init(N,N)
+    !
+    !Measure every local Hamiltonian in its physical position.  Hi is
+    !diagonal because it is a site-resolved container, not an operator
+    !acting in the many-body Hilbert space.
+    do i=1,N
+       if(.not.dot(i)%operators%has_key("H"))&
+            stop "Measure_LocalEnergy_DMRG ERROR: missing local H operator"
+       Hsite=dot(i)%operators%op("H")
+       Ei=Measure_Op_DMRG(Hsite,i)
+       Eloc=Eloc+Ei
+       if(present(Hi))then
+          if(Ei/=0d0)then
+#ifdef _CMPLX
+             call Hi%insert(cmplx(Ei,0d0,8),i,i)
+#else
+             call Hi%insert(Ei,i,i)
+#endif
+          endif
+       endif
+       call Hsite%free()
+    enddo
+  end function Measure_LocalEnergy_DMRG
+
+
+
+
+  !> Convenience wrapper returning Etotal=Ebond+Eloc.  The bond term is
+  !> selected from SiteType: kinetic energy for fermions and exchange
+  !> energy for spins.  Eij and Hi contain the resolved contributions.
+  !>
+  !> Fermions: Etotal=Ekin+Eloc, Eij=Kij.
+  !> Spins   : Etotal=Espin+Eloc, Eij=Jij.
+  !> The reconstructed Etotal provides a direct consistency check with
+  !> the ground-state energy returned by the DMRG diagonalization.
+  subroutine Measure_Energy_DMRG(Hij,Ebond,Eloc,Etotal,Eij,Hi)
+#ifdef _CMPLX
+    complex(8),intent(in)                    :: Hij(:,:)
+#else
+    real(8),intent(in)                       :: Hij(:,:)
+#endif
+    real(8),intent(out)                      :: Ebond,Eloc,Etotal
+    type(sparse_matrix),optional,intent(out) :: Eij,Hi
+    character(len=1)                         :: site_type
+    !
+    if(.not.allocated(dot))stop "Measure_Energy_DMRG ERROR: DMRG sites are not initialized"
+    site_type=to_lower(dot(1)%SiteType(1:1))
+    !The local site type is the single source of dispatch information;
+    !the caller uses the same public entry point for both model classes.
+    select case(site_type)
+    case("f","e")
+       if(present(Eij))then
+          Ebond=Measure_KineticEnergy_DMRG(Hij,Eij)
+       else
+          Ebond=Measure_KineticEnergy_DMRG(Hij)
+       endif
+    case("s")
+       if(present(Eij))then
+          Ebond=Measure_SpinExchangeEnergy_DMRG(Hij,Eij)
+       else
+          Ebond=Measure_SpinExchangeEnergy_DMRG(Hij)
+       endif
+    case default
+       stop "Measure_Energy_DMRG ERROR: unsupported site type"
+    end select
+    !The local contribution is model independent because both standard
+    !site constructors store it with the common key "H".
+    if(present(Hi))then
+       Eloc=Measure_LocalEnergy_DMRG(Hi)
+    else
+       Eloc=Measure_LocalEnergy_DMRG()
+    endif
+    Etotal=Ebond+Eloc
+  end subroutine Measure_Energy_DMRG
 
 
 
@@ -1743,248 +2134,3 @@ END MODULE DMRG_MEASURE
 
 
 
-
-
-
-!##################################################################
-!                   AVERAGE OPERATOR 
-!Purpose: take the average of an operator O on the last step basis 
-!##################################################################
-! function Average_Op_dmrg(Oi,pos) result(Oval)
-!   type(sparse_matrix),intent(in)   :: Oi
-!   integer                          :: pos
-!   character(len=1)                 :: label
-!   real(8)                          :: Oval
-!   type(sparse_matrix)              :: Psi
-!   integer                          :: L,R,N
-!   !
-!   !The lenght of the last block contributing to the SB construction-> \psi
-!   L = left%length-1
-!   R = right%length-1
-!   N = L+R
-!   !
-!   !Check:
-!   if(pos<1.OR.pos>N)stop "Average_op_dmrg error: Pos not in [1,Ldmrg]"
-!   !
-!   !Get label of the block holding the site at position pos:
-!   label='l'; if(pos>L)label='r'
-!   !
-!   !Measure using PSI matrix:
-!   select case(label)
-!   case ("l")
-!      if(any(shape(psi_left)/=shape(Oi)))stop "average_op_dmrg ERROR: shape(psi_left) != shape(Oi)"
-!      Psi  = as_sparse(psi_left)
-!      Oval = trace(as_matrix(matmul(matmul(Psi%dgr(),Oi),Psi)))
-!   case ("r")
-!      if(any(shape(psi_right)/=shape(Oi)))stop "average_op_dmrg ERROR: shape(psi_right) != shape(Oi)"
-!      Psi  = as_sparse(psi_right)
-!      Oval = trace(as_matrix(matmul(matmul(Psi%dgr(),Oi),Psi)))
-!   end select
-!   call Psi%free()
-! end function Average_Op_dmrg
-
-
-
-! subroutine Measure_Op_dmrg(Op,file,ref,avOp)
-!   type(sparse_matrix),intent(in)            :: Op
-!   character(len=*)                          :: file
-!   character(len=1)                          :: label
-!   real(8) :: ref
-!   real(8),dimension(:),allocatable,optional :: avOp
-!   real(8)                                   :: val
-!   integer                                   :: it,i,L,R,N,j,pos,dims(2)
-!   type(sparse_matrix)                       :: Oi,U,Psi,Ok,I_R,I_L
-!   !
-!   suffix=label_DMRG('u')
-!   !
-!   L = left%length-1           !the len of the last block used to create the SB->\psi
-!   R = right%length-1
-!   N = L+R
-!   !
-!   if(present(avOp))then
-!      if(allocated(avOp))deallocate(avOp)
-!      allocate(avOp(N))
-!   endif
-!   !
-!   call start_timer()
-!   do pos=1,N
-!      Oi = Build_Op_dmrg(Op,pos)
-!      Oi = Advance_Op_dmrg(Oi,pos)
-!      val= Average_Op_dmrg(Oi,pos)
-!      if(present(avOp))avOp(pos)=val
-!      call write_user_scalar(trim(file),val,x=pos)
-!      call Oi%free()
-!      call progress(pos,N)
-!   enddo
-!   call stop_timer("Done "//str(file))
-
-
-
-
-!   U =  right%omatrices%op(index=R)
-!   dims=shape(U)
-!   ! I_R = Id(dot%dim).x.Id(dims(2))!(matmul(U%t(),U))
-!   I_R = Id(dot%dim*dims(2))
-!   U =  left%omatrices%op(index=R)
-!   dims=shape(U)
-!   ! I_L = Id(dims(2)).x.Id(dot%dim)!(matmul(U%t(),U)).x.Id(dot%dim)
-!   I_L = Id(dims(2)*dot%dim)!(matmul(U%t(),U)).x.Id(dot%dim)
-
-
-!   print*,"size(GSpsi)",size(gs_vector(:,1))
-
-
-
-!   print*,""
-!   print*,"- - - - - - - - - - - - - - - - -"
-!   print*," METHOD 1: O.x.I - I.x.O full"
-!   print*,"- - - - - - - - - - - - - - - - -"
-!   print*,""
-
-
-!   print*,""
-!   print*,"pos=1"
-!   print*,""
-!   print*,"Method <psi|O.x.I_R|psi>"
-!   print*,shape(I_R)
-!   pos=1
-!   Oi = Build_Op_Dmrg(Op,pos)
-!   do it=1,L
-!      U  = left%omatrices%op(index=it)
-!      Oi = (matmul(matmul(U%t(),Oi),U)).x.Id(dot%dim)
-!   enddo
-!   Oi = sp_kron(Oi,I_R,sb_states)
-!   print*,shape(Oi)
-!   val = dot_product(gs_vector(:,1),Oi%dot(gs_vector(:,1)))
-!   print*,pos,val    
-
-
-!   print*,""
-!   print*,"pos=N"
-!   print*,""
-!   print*,"Method <psi|I_L.x.O|psi>"
-!   pos=N
-!   print*,shape(I_L)
-!   Oi = Build_Op_Dmrg(Op,pos)
-!   do it=1,R
-!      U  = right%omatrices%op(index=it)
-!      Oi = Id(dot%dim).x.(matmul(matmul(U%t(),Oi),U))
-!   enddo
-!   Oi = sp_kron(I_L,Oi,sb_states)
-!   print*,shape(Oi)
-!   val = dot_product(gs_vector(:,1),OI%dot(gs_vector(:,1)))
-!   print*,pos,val    
-
-
-
-!   print*,""
-!   print*,"- - - - - - - - - - - - - - - - -"
-!   print*," METHOD 3: direct O_L, O_R"
-!   print*,"- - - - - - - - - - - - - - - - -"
-!   print*,""
-
-
-!   Nsb  = size(sb_sector)
-!   allocate(Dls(Nsb),Drs(Nsb),Offset(Nsb),Oleft(Nsb),Oright(Nsb))
-!   allocate(LI(Nsb),RI(Nsb))
-!   Offset=0
-!   do isb=1,Nsb
-!      qn   = sb_sector%qn(index=isb)
-!      Dls(isb)= sector_qn_dim(left%sectors(1),qn)
-!      Drs(isb)= sector_qn_dim(right%sectors(1),current_target_qn - qn)
-!      if(isb>1)Offset(isb)=Offset(isb-1)+Dls(isb-1)*Drs(isb-1)
-!      LI(isb)%states = sb2block_states(qn,'left')
-!      RI(isb)%states = sb2block_states(qn,'right')
-!   enddo
-
-!   pos=1
-!   Oi = Build_Op_Dmrg(Op,pos)
-!   do it=1,L
-!      U  = left%omatrices%op(index=it)
-!      Oi = (matmul(matmul(U%t(),Oi),U)).x.Id(dot%dim)
-!   enddo
-!   do isb=1,Nsb
-!      !> get: Oi*^L 
-!      Oleft(isb) = sp_filter(Oi,LI(isb)%states)
-!   enddo
-!   val = dot_product(gs_vector(:,1), OdotV_direct(Oleft,gs_vector(:,1),'left'))
-!   print*,pos,val
-
-
-!   pos=N
-!   Oi = Build_Op_Dmrg(Op,pos)
-!   do it=1,R
-!      U  = right%omatrices%op(index=it)
-!      Oi = Id(dot%dim).x.(matmul(matmul(U%t(),Oi),U))
-!   enddo
-!   do isb=1,Nsb
-!      !> get: Oi*^R
-!      Oright(isb) = sp_filter(Oi,RI(isb)%states)
-!   enddo
-!   val = dot_product(gs_vector(:,1), OdotV_direct(Oright,gs_vector(:,1),'right'))
-!   print*,pos,val
-
-
-!   if(allocated(Dls))deallocate(Dls)
-!   if(allocated(Drs))deallocate(Drs)
-!   if(allocated(Offset))deallocate(Offset)
-!   if(allocated(Oleft))deallocate(Oleft)
-!   if(allocated(Oright))deallocate(Oright)
-!   if(allocated(Li))deallocate(Li)
-!   if(allocated(Ri))deallocate(Ri)
-
-
-! contains
-
-
-
-!   function OdotV_direct(Op,v,direction) result(Ov)
-!     integer                          :: Nsb,Nloc
-!     type(sparse_matrix),dimension(:) :: Op
-!     real(8),dimension(:)             :: v
-!     character(len=*)                 :: direction
-!     real(8),dimension(size(v))       :: Ov
-!     real(8)                          :: val
-!     integer                          :: i,j,k,n
-!     integer                          :: ir,il,jr,jl,it
-!     integer                          :: ia,ib,ic,ja,jb,jc,jcol
-!     real(8)                          :: aval,bval
-!     !
-!     Ov=zero
-!     !> loop over all the SB sectors:
-!     select case(to_lower(direction))
-!     case("l","left","sys","s")
-!        do k=1,size(sb_sector)
-!           !> apply the H^L x 1^r: need to T v and Ov
-!           do ir=1,Drs(k)
-!              do il=1,Dls(k)
-!                 i = ir + (il-1)*Drs(k) + offset(k)
-!                 do jcol=1,Op(k)%row(il)%Size
-!                    val = Op(k)%row(il)%vals(jcol)
-!                    jl  = Op(k)%row(il)%cols(jcol)
-!                    j   = ir + (jl-1)*Drs(k) + offset(k)
-!                    Ov(i) = Ov(i) + val*v(j)
-!                 end do
-!              enddo
-!           enddo
-!        enddo
-!     case("r","right","env","e")
-!        do k=1,size(sb_sector)
-!           !> apply the 1^L x H^r
-!           do il=1,Drs(k)
-!              do ir=1,Dls(k)
-!                 i = il + (ir-1)*Drs(k) + offset(k)           
-!                 do jcol=1,Op(k)%row(il)%Size
-!                    val = Op(k)%row(il)%vals(jcol)
-!                    jl  = Op(k)%row(il)%cols(jcol)
-!                    j   = jl + (ir-1)*Drs(k) + offset(k)
-!                    Ov(i) = Ov(i) + val*v(j)
-!                 end do
-!              enddo
-!           enddo
-!        enddo
-!     end select
-!     !
-!   end function OdotV_direct
-
-! end subroutine Measure_Op_dmrg

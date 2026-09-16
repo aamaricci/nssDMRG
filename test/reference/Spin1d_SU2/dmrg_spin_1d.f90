@@ -7,9 +7,9 @@ program dmrg_spin_1d
   implicit none
   character(len=64)                  :: finput
   integer                            :: i,j,SUN,Unit,pos,Nsites
-  real(8)                            :: Hvec,Noise,R,Sij
+  real(8)                            :: Hvec,Noise,Sij,Espin,Eloc,Etotal
   type(site)                         :: MyDot
-  type(sparse_matrix)                :: Sz,Sz2
+  type(sparse_matrix)                :: Sz,Sz2,Jij,Hi
   real(8),dimension(:,:),allocatable :: Hlr
   real(8),dimension(:),allocatable   :: avSz,avSz2
   integer                            :: irank,comm,rank,ierr
@@ -89,9 +89,20 @@ program dmrg_spin_1d
         if(master)write(unit,*)1,j,Sij
      enddo
      if(master)close(unit)
+
+     !Exchange, local and reconstructed total energies.  Jij contains
+     !one upper-triangular entry for each physical spin bond.
+     call Measure_Energy_DMRG(Hlr,Espin,Eloc,Etotal,Jij,Hi)
+     if(master)then
+        unit=fopen("Ecomponents"//str(label_DMRG('u')),append=.true.)
+        write(unit,*)Espin,Eloc,Etotal
+        close(unit)
+     endif
      call End_Measure_DMRG()
      call Sz%free()
      call Sz2%free()
+     call Jij%free()
+     call Hi%free()
   endif
 
   if(master)then
@@ -123,5 +134,4 @@ contains
   end subroutine copy_table
 
 end program dmrg_spin_1d
-
 
