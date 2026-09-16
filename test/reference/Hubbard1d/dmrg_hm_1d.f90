@@ -9,10 +9,10 @@ program hubbard_1d
   integer                                        :: Nso
   character(len=64)                              :: finput
   character(len=:),allocatable                   :: run_label
-  integer                                        :: i,j,unit,iorb,ispin,pos,Nsites
-  real(8)                                        :: ts,Mh,lambda,val,K,alpha
+  integer                                        :: i,j,unit,iorb,ispin,Nsites
+  real(8)                                        :: ts,Mh,lambda,K,Eloc,Etotal,alpha
   type(site)                                     :: MyDot
-  type(sparse_matrix)                            :: P,Cl,Pl,Tij,Docc
+  type(sparse_matrix)                            :: Kij,Hi,Docc
   type(sparse_matrix),dimension(:,:),allocatable :: N,C
   real(8),dimension(:,:),allocatable             :: Hloc,Hlr,avLocal,corr
   integer                                        :: irank,comm,rank,ierr
@@ -80,7 +80,6 @@ program hubbard_1d
   if(imeasure)then      
      !Post-processing and measure quantities:
      allocate(C(Norb,Nspin),N(Norb,Nspin))
-     P=myDot%operators%op(key="P"//myDot%okey(0,0,ilink='n'))
      do ispin=1,Nspin
         do iorb=1,Norb
            C(iorb,ispin) = myDot%operators%op(key="C"//myDot%okey(iorb,ispin,ilink='n'))
@@ -99,19 +98,12 @@ program hubbard_1d
         close(unit)
      endif
      !
-     !Measure <K>
+     !Measure the kinetic, local and reconstructed total energies.
+     !Kij stores one upper-triangular entry for every physical bond,
+     !while Hi stores the local contribution on its diagonal.
      if(master)unit=fopen("K"//str(label_DMRG('u')),append=.true.)
-     call Init_measure_dmrg("K and nn")
-     K = 0d0
-     do pos=1,Ldmrg-1
-        Pl  = Build_Op_DMRG(P,pos,set_basis=.true.)
-        Cl  = Build_Op_DMRG(C(1,1),pos,set_basis=.true.)
-        Tij = get_Tij()
-        Tij = Advance_Corr_DMRG(Tij,pos)
-        K   = K + Average_Op_DMRG(Tij,pos)
-        if(master)call eta(pos,Ldmrg-1)
-     enddo
-     if(master)write(unit,*)K
+     call Measure_Energy_DMRG(Hlr,K,Eloc,Etotal,Kij,Hi)
+     if(master)write(unit,*)K,Eloc,Etotal
      if(master)close(unit)
      !
      !The density matrix is flattened with io outermost and jo innermost.
@@ -132,9 +124,8 @@ program hubbard_1d
      if(master)close(unit)
 
      call End_measure_dmrg()
-     call Pl%free()
-     call Cl%free()
-     call Tij%free()
+     call Kij%free()
+     call Hi%free()
      call Docc%free()
      do ispin=1,Nspin
       do iorb=1,Norb
@@ -158,11 +149,6 @@ program hubbard_1d
 #endif
 
   contains
-
-    function get_Tij() result(Tij)
-      type(sparse_matrix) :: Tij
-      Tij = 2d0*Hlr(1,1)*(matmul(Cl%dgr(),Pl).x.C(1,1))  + 2d0*Hlr(1,1)*(matmul(Pl,Cl).x.C(1,1)%dgr())
-    end function get_Tij
 
     function flatten_correlation(Cij) result(values)
       real(8),intent(in) :: Cij(:,:)
@@ -194,4 +180,3 @@ program hubbard_1d
 
 
 end program hubbard_1d
-

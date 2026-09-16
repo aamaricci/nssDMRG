@@ -10,7 +10,7 @@ program dmrg_spin_1d
   character(len=:),allocatable          :: run_label
   integer                               :: i,j,unit,Nsites,comm
   type(site),allocatable                :: MyDot(:)
-  type(sparse_matrix)                   :: Sz,Sz2
+  type(sparse_matrix)                   :: Sz,Sz2,Jij,Hi
 #ifdef _CMPLX
   complex(8),allocatable                :: Hlr(:,:)
   complex(8)                            :: corr
@@ -19,6 +19,7 @@ program dmrg_spin_1d
   real(8)                               :: corr
 #endif
   real(8),allocatable                   :: avSz(:),avSz2(:)
+  real(8)                               :: Espin,Eloc,Etotal
   real(8),parameter                     :: atol=1d-8,rtol=1d-7
   real(8),parameter                     :: observable_atol=1d-6
   logical                               :: master=.true.
@@ -83,6 +84,8 @@ program dmrg_spin_1d
 #endif
   enddo
   if(master)close(unit)
+  call Measure_Energy_DMRG(Hlr,Espin,Eloc,Etotal,Jij,Hi)
+  if(master)write(*,*)"Measured energies [Espin,Eloc,Etotal]:",Espin,Eloc,Etotal
   call End_Measure_DMRG()
 
   if(master)then
@@ -94,6 +97,7 @@ program dmrg_spin_1d
   endif
 
   call Sz%free();call Sz2%free()
+  call Jij%free();call Hi%free()
   call finalize_dmrg()
 #ifdef _MPI
   call finalize_MPI()
