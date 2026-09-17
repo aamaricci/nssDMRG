@@ -313,7 +313,6 @@ build/test/work/Hubbard1d
 
 The directories under `test/reference` contain the manual drivers, input files, and trusted numerical tables used to generate the reference data. These drivers are neither compiled nor executed by CMake. Once validated, the model input file and the resulting `*.check` tables must be copied manually to the corresponding directory under `test/src`. CMake stages the approved files from `test/src` into the isolated test working directories. After updating them, rerun `cmake ..` from the build directory before executing the tests again.
 
-
 ## Profiling
 The code contains a detailed profiling of  timing and parallel data communication for the crucial parts of the algorithm. The profiling output is regulated with the CMake configuration variable `PROFILE`.
 
