@@ -22,13 +22,6 @@ jobs:
         id: scifor
         uses: SciFortran/checkout@main
 
-      - name: Check SciFortran environment
-        run: |
-          test -s "$SFROOT/lib/libscifor.a"
-          pkg-config --exists scifor
-          pkg-config --cflags --libs scifor
-          echo "Using SciFortran $SCIFOR_RELEASE"
-
       - name: Configure nssDMRG
         run: cmake -S . -B build-ci -DUSE_MPI=ON -DBUILD_TESTING=OFF
 
