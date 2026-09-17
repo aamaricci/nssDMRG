@@ -1,21 +1,14 @@
-# This workflow is entirely based on the original work of:
-# Samuele Giuli (for SciFortran project)
-# It is adapted here to the DMRG case + using a local action to setup OS
-#
-name: CI DMRG workflow 
+name: CI nssDMRG
 
-
-on: 
+on:
   push:
-    branches:
-      - main-ci
+    branches: [main-ci]
 
-defaults:
-  run:
-    shell: bash -l {0}
+permissions:
+  contents: read
 
 jobs:
-  test-DMRG:
+  build:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -23,31 +16,21 @@ jobs:
         os: [ubuntu-24.04, macos-15]
 
     steps:
+      - uses: actions/checkout@v4
 
-#********* SETUP PART **********
-
-# Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@main
-
-# Setup OS
-      - uses: ./.github/actions
-        with:
-          pack-type: open
-
-# Build SciFortran
-      - id: scifor
+      - name: Install SciFortran release
+        id: scifor
         uses: SciFortran/checkout@main
 
-# Build DMRG
-      - name: Cloning DMRG
-        run: git clone https://github.com/aamaricci/nssDMRG.git nssDMRG
-      - name: Install nssDMRG
+      - name: Check SciFortran environment
         run: |
-          source ~/.scifor_config_user
-          export PKG_CONFIG_PATH=~/.pkgconfig.d
-          export GLOB_INC=$( pkg-config --cflags scifor )
-          export GLOB_LIB=$( pkg-config --libs   scifor  | sed  "s/;/ /g"  | sed 's/\\/  /g' )
-          Lattice_DMRG/bin/ci_setup_dmrg.sh
+          test -s "$SFROOT/lib/libscifor.a"
+          pkg-config --exists scifor
+          pkg-config --cflags --libs scifor
+          echo "Using SciFortran $SCIFOR_RELEASE"
 
-# #******** TESTING PART ********
-# # Testing is now included in the install script using ctest or make test
+      - name: Configure nssDMRG
+        run: cmake -S . -B build-ci -DUSE_MPI=ON -DBUILD_TESTING=OFF
+
+      - name: Build nssDMRG
+        run: cmake --build build-ci --parallel 2
