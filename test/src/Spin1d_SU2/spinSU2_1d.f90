@@ -8,6 +8,7 @@ program dmrg_spin_1d
   implicit none
   character(len=64)                     :: finput
   character(len=:),allocatable          :: run_label
+  character(len=:),allocatable          :: keySz
   integer                               :: i,j,unit,Nsites,comm
   type(site),allocatable                :: MyDot(:)
   type(sparse_matrix)                   :: Sz,Sz2,Jij,Hi
@@ -52,7 +53,8 @@ program dmrg_spin_1d
 
   !The final iDMRG superblock contains two blocks of length Ldmrg.
   Nsites=2*Ldmrg
-  Sz =MyDot(1)%operators%op(key="S"//MyDot(1)%okey(0,1,ilink="n"))
+  keySz="S"//MyDot(1)%okey(0,1,ilink="n")
+  Sz =MyDot(1)%operators%op(key=keySz)
   Sz2=matmul(Sz,Sz)
   call Measure_DMRG(Sz ,pos=arange(1,Nsites),avOp=avSz)
   call Measure_DMRG(Sz2,pos=arange(1,Nsites),avOp=avSz2)
@@ -84,6 +86,16 @@ program dmrg_spin_1d
 #endif
   enddo
   if(master)close(unit)
+  !
+  !Repeated sites are multiplied before truncation: Sz^2=1/4 at each end.
+  corr=Measure_Product_DMRG([keySz,keySz,keySz,keySz],[1,Nsites,1,Nsites])
+  if(abs(corr-1d0/16d0)>observable_atol)&
+       error stop "spin product correlation ERROR: repeated sites"
+  !
+  corr=Measure_Product_DMRG([keySz,keySz],[1,Nsites])
+  if(abs(corr-Measure_Corr_DMRG(keySz,keySz,1,Nsites))>observable_atol)&
+       error stop "spin product correlation ERROR: L/R contraction"
+  !
   call Measure_Energy_DMRG(Hlr,Espin,Eloc,Etotal,Jij,Hi)
   if(master)write(*,*)"Measured energies [Espin,Eloc,Etotal]:",Espin,Eloc,Etotal
   call End_Measure_DMRG()

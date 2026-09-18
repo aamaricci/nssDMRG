@@ -17,6 +17,7 @@ module DMRG_MEASURE
   public :: Advance_Corr_DMRG
   public :: Average_Op_DMRG
   public :: Measure_Corr_DMRG
+  public :: Measure_Product_DMRG
   !Predefined procedures:
   public :: Measure_SpinSpin_DMRG          !get the spin-spin correlation ("s")
   public :: Measure_DensityDensity_DMRG    !get the density-density correlation ("f")
@@ -33,6 +34,11 @@ module DMRG_MEASURE
      module procedure :: Measure_Corr_keys_DMRG
      module procedure :: Measure_Corr_ops_DMRG
   end interface Measure_Corr_DMRG
+
+  interface Measure_Product_DMRG
+     module procedure :: Measure_Product_keys_DMRG
+     module procedure :: Measure_Product_ops_DMRG
+  end interface Measure_Product_DMRG
 
   interface Write_DMRG
      module procedure :: write_user_scalar
@@ -547,6 +553,181 @@ contains
     call Oj%free()
     call Oij%free()
   end function Measure_Corr_ops_DMRG
+
+
+
+
+  !##################################################################
+  !         MEASURE AN ORDERED PRODUCT OF LOCAL OPERATORS
+  !##################################################################
+  !> Read every factor from its site's LIST_OPERATORS entry.  The order
+  !> of keys and positions is the order of the operator product; the
+  !> same position may appear more than once.
+  function Measure_Product_keys_DMRG(keys,positions) result(value)
+    character(len=*),intent(in)          :: keys(:)
+    integer,intent(in)                   :: positions(:)
+#ifdef _CMPLX
+    complex(8)                            :: value
+#else
+    real(8)                               :: value
+#endif
+    type(sparse_matrix),allocatable       :: Ops(:)
+    real(8),allocatable                   :: dqs(:,:)
+    character(len=:),allocatable          :: types(:)
+    integer                               :: a,M,N,Qdim
+    !
+    value=zero
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    M=size(keys)
+    N=left%length+right%length
+    if(M==0.OR.size(positions)/=M)&
+         stop "Measure_Product_DMRG ERROR: incompatible factors and positions"
+    if(any(positions<1).OR.any(positions>N))&
+         stop "Measure_Product_DMRG ERROR: position not in [1,Nsites]"
+    !
+    Qdim=size(current_target_qn)
+    allocate(Ops(M),dqs(Qdim,M))
+    allocate(character(len=64)::types(M))
+    do a=1,M
+       if(.not.dot(positions(a))%operators%has_key(trim(keys(a))))&
+            stop "Measure_Product_DMRG ERROR: missing site operator key"
+       Ops(a)=dot(positions(a))%operators%op(trim(keys(a)))
+       dqs(:,a)=dot(positions(a))%operators%dq(trim(keys(a)))
+       types(a)=dot(positions(a))%operators%type(key=trim(keys(a)))
+    enddo
+    value=Measure_Product_ops_DMRG(Ops,dqs,types,positions)
+    do a=1,M
+       call Ops(a)%free()
+    enddo
+  end function Measure_Product_keys_DMRG
+
+
+
+
+  !> Evaluate <O_1(p_1)...O_M(p_M)> in exactly the supplied order.
+  !> dqs(:,a) and types(a) describe Ops(a); type="fermionic" marks an
+  !> odd factor.  This interface also accepts conjugated/composite local
+  !> operators that have no key in LIST_OPERATORS.
+  function Measure_Product_ops_DMRG(Ops,dqs,types,positions) result(value)
+    type(sparse_matrix),intent(in)        :: Ops(:)
+    real(8),intent(in)                   :: dqs(:,:)
+    character(len=*),intent(in)          :: types(:)
+    integer,intent(in)                   :: positions(:)
+#ifdef _CMPLX
+    complex(8)                            :: value
+#else
+    real(8)                               :: value
+#endif
+    type(sparse_matrix),allocatable       :: SiteOps(:),BlockOps(:)
+    type(sparse_matrix)                   :: Oleft,Oright,Psite,Tmp
+    integer,allocatable                   :: BlockPos(:)
+    logical,allocatable                   :: active(:)
+    real(8),allocatable                   :: dqLeft(:),dqRight(:)
+    integer                               :: a,k,M,N,L,Qdim,Np,ib,odd_count
+    real(8),parameter                     :: dq_tol=100d0*epsilon(1d0)
+    !
+    value=zero
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    M=size(Ops)
+    L=left%length
+    N=L+right%length
+    Qdim=size(current_target_qn)
+    if(M==0.OR.size(types)/=M.OR.size(positions)/=M)&
+         stop "Measure_Product_DMRG ERROR: incompatible factors and positions"
+    if(size(dqs,1)/=Qdim.OR.size(dqs,2)/=M)&
+         stop "Measure_Product_DMRG ERROR: shape(dqs) != [Qdim,M]"
+    if(any(positions<1).OR.any(positions>N))&
+         stop "Measure_Product_DMRG ERROR: position not in [1,Nsites]"
+    !
+    !A fixed-sector expectation value vanishes unless the total shift
+    !and fermionic grading are both zero.  Keep the two block shifts for
+    !the rectangular L/R sector contraction below.
+    allocate(dqLeft(Qdim),dqRight(Qdim))
+    dqLeft=0d0;dqRight=0d0;odd_count=0
+    do a=1,M
+       if(positions(a)<=L)then
+          dqLeft=dqLeft+dqs(:,a)
+       else
+          dqRight=dqRight+dqs(:,a)
+       endif
+       if(is_odd_fermion_type(types(a)))odd_count=odd_count+1
+    enddo
+    if(any(abs(dqLeft+dqRight)>dq_tol).OR.mod(odd_count,2)/=0)return
+    !
+    !Build the ordinary tensor-product representation site by site.
+    !For each odd factor at p, its Jordan--Wigner string contributes
+    !P_k on every k<p; then append the factor itself at p.  Traversing
+    !the factors in input order preserves signs without sorting them.
+    !In particular, repeated positions are multiplied locally before
+    !any later DMRG truncation.
+    allocate(SiteOps(N),active(N));active=.false.
+    do a=1,M
+       if(is_odd_fermion_type(types(a)))then
+          do k=1,positions(a)-1
+             Psite=local_parity_operator(k)
+             call append_at_site(k,Psite)
+             call Psite%free()
+          enddo
+       endif
+       call append_at_site(positions(a),Ops(a))
+    enddo
+    !
+    !Each side is built in its final renormalized basis.  An empty side
+    !contributes the identity.  The final contraction handles operators
+    !with nonzero but compensating shifts on opposite sides of the cut.
+    do ib=1,2
+       if(ib==1)then
+          Np=count(active(1:L))
+       else
+          Np=count(active(L+1:N))
+       endif
+       if(Np==0)then
+          if(ib==1)Oleft=id(left%Dim)
+          if(ib==2)Oright=id(right%Dim)
+          cycle
+       endif
+       allocate(BlockOps(Np),BlockPos(Np))
+       Np=0
+       do k=1,N
+          if(ib==1.AND.k>L)cycle
+          if(ib==2.AND.k<=L)cycle
+          if(.not.active(k))cycle
+          Np=Np+1
+          BlockOps(Np)=SiteOps(k)
+          BlockPos(Np)=k
+       enddo
+       if(ib==1)Oleft=Build_Product_Block_DMRG(BlockOps,BlockPos)
+       if(ib==2)Oright=Build_Product_Block_DMRG(BlockOps,BlockPos)
+       do k=1,Np
+          call BlockOps(k)%free()
+       enddo
+       deallocate(BlockOps,BlockPos)
+    enddo
+    value=Average_Corr_LR_DMRG(Oleft,dqLeft,Oright,dqRight)
+    !
+    do k=1,N
+       if(active(k))call SiteOps(k)%free()
+    enddo
+    call Oleft%free()
+    call Oright%free()
+  contains
+    !Multiply a new local factor on the right of the factors already
+    !assigned to this site, preserving the original product order.
+    subroutine append_at_site(pos,Op)
+      integer,intent(in)             :: pos
+      type(sparse_matrix),intent(in) :: Op
+      if(active(pos))then
+         Tmp=matmul(SiteOps(pos),Op)
+         SiteOps(pos)=Tmp
+         call Tmp%free()
+      else
+         SiteOps(pos)=Op
+         active(pos)=.true.
+      endif
+    end subroutine append_at_site
+  end function Measure_Product_ops_DMRG
 
 
 
@@ -2126,9 +2307,6 @@ contains
 
 
 END MODULE DMRG_MEASURE
-
-
-
 
 
 
