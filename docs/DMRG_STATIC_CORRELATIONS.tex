@@ -91,6 +91,61 @@ corr = Measure_Corr_DMRG(OpA,dqA,OpB,dqB,posA,posB,typeA,typeB,&
 Here the caller is responsible for supplying consistent shifts and operator
 types.
 
+\section{Ordered products of an arbitrary number of operators}
+
+The more general interface evaluates the ordered product
+\begin{equation}
+  C(i_1,\ldots,i_M)
+  =\bra{\Psi}O_1(i_1)O_2(i_2)\cdots O_M(i_M)\ket{\Psi}.
+\end{equation}
+The input order is the algebraic order: positions need not be sorted and may
+repeat.  For operators stored on the sites, the preferred call is
+\begin{lstlisting}[style=fortran]
+value = Measure_Product_DMRG(keys,positions)
+\end{lstlisting}
+where \texttt{keys(a)} identifies $O_a$ on site \texttt{positions(a)}.  The
+matrix, shift, and fermionic grading are read from the corresponding site.
+For factors constructed by the caller, use
+\begin{lstlisting}[style=fortran]
+value = Measure_Product_DMRG(Ops,dqs,types,positions)
+\end{lstlisting}
+with \texttt{dqs(:,a)} equal to $dq(O_a)$ and \texttt{types(a)} equal to
+\texttt{"fermionic"} for an odd factor.  These metadata must describe the
+supplied matrices; in particular, the shift of a conjugated operator changes
+sign.
+
+For a fixed-sector expectation value, the routine first applies the selection
+rules
+\begin{equation}
+  \sum_{a=1}^{M}dq(O_a)=0,
+  \qquad
+  \sum_{a=1}^{M}p(O_a)=0\pmod 2.
+\end{equation}
+If either fails, the value is zero.  For each odd factor at position $i_a$,
+the Jordan--Wigner representation contributes $P_k=(-1)^{N_k}$ on every
+physical site $k<i_a$.  These parity factors and $O_a(i_a)$ are multiplied
+in the original input order.  Consequently, all factors on a repeated site
+are combined before that site enters the block-growth sequence, retaining
+the distinction between, for example, $c_i^\dagger c_i$ and
+$c_i c_i^\dagger$.
+
+The resulting local matrices are transported separately through the left and
+right blocks; an unused block carries the identity.  The final superblock
+contraction includes transitions between quantum-number sectors when the
+two block shifts are nonzero but compensate.  This construction therefore
+covers products entirely within one block as well as products crossing the
+cut, in both serial and MPI runs.
+
+For example, the four-point correlator of a bond operator
+$O_{4f}(i)=T^z_iT^z_{i+1}$ is obtained directly as
+\begin{equation}
+  \avg{O_{4f}(i)O_{4f}(j)}
+  =\avg{T^z_iT^z_{i+1}T^z_jT^z_{j+1}},
+\end{equation}
+by passing the four keys and positions.  No intermediate operator
+$O_{4f}$ needs to be stored.  In particular, overlapping bonds retain
+the stated operator order.
+
 \section{Quantum-number shifts}
 
 For every operator the convention is

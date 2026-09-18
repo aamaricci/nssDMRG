@@ -19,6 +19,13 @@ program hubbard_1d
 #endif
   type(sparse_matrix),allocatable                :: Cop(:,:),Nop(:,:)
   type(sparse_matrix)                            :: Docc,Kij,Hi
+  type(sparse_matrix)                            :: Cdag
+  real(8),allocatable                            :: dqC(:),dqs(:,:)
+#ifdef _CMPLX
+  complex(8)                                     :: product
+#else
+  real(8)                                        :: product
+#endif
   real(8),allocatable                            :: avLocal(:,:),values(:)
   real(8)                                        :: Ekin,Eloc,Etotal
   real(8),parameter                              :: atol=1d-8,rtol=1d-7
@@ -95,6 +102,37 @@ program hubbard_1d
      if(master)write(unit,*)1,j,values
   enddo
   if(master)close(unit)
+  !
+  !Four odd factors form n_up(1)n_up(Nsites), including the L/R cut.
+  key="C"//MyDot(1)%okey(1,1,ilink="n")
+  dqC=MyDot(1)%operators%dq(key)
+  allocate(dqs(size(dqC),4))
+  dqs(:,1)=-dqC;dqs(:,2)=dqC
+  dqs(:,3)=-dqC;dqs(:,4)=dqC
+  Cdag=Cop(1,1)%dgr()
+  !
+  !check <C^+C> with two methods
+  product=Measure_Product_DMRG([Cdag,Cop(1,1)],dqs(:,1:2),&
+       ["fermionic","fermionic"],[1,Nsites])
+  if(abs(product-Measure_Corr_DMRG(Cdag,-dqC,Cop(1,1),dqC,&
+       1,Nsites,"fermionic","fermionic"))>observable_atol)&
+       error stop "Hubbard product correlation ERROR: fermionic L/R string"
+  !
+  !check <C.C^+> = 1-<C^+C>=1-n
+  product=Measure_Product_DMRG([Cop(1,1),Cdag],-dqs(:,1:2),&
+       ["fermionic","fermionic"],[1,1])
+  if(abs(product-(1d0-avLocal(1,1)))>observable_atol)&
+       error stop "Hubbard product correlation ERROR: factor order"
+  !
+  !check <C^+C.C^+C> = <n(1)n(Nsites)>
+  product=Measure_Product_DMRG([Cdag,Cop(1,1),Cdag,Cop(1,1)],&
+       dqs,["fermionic","fermionic","fermionic","fermionic"],&
+       [1,1,Nsites,Nsites])
+  corr=Measure_DensityDensity_DMRG(1,Nsites)
+  if(abs(product-corr(1,1))>observable_atol)&
+       error stop "Hubbard product correlation ERROR: density product"
+  call Cdag%free()
+  !
   call Measure_Energy_DMRG(Hlr,Ekin,Eloc,Etotal,Kij,Hi)
   if(master)write(*,*)"Measured energies [Ekin,Eloc,Etotal]:",Ekin,Eloc,Etotal
   call End_Measure_DMRG()
