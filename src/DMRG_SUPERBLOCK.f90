@@ -684,7 +684,7 @@ contains
     inquire(file=str(file),exist=file_exists)
     if(.not.file_exists)then
        file        = str(measure_restart_file)//".restart"
-       vector_file = str(measure_restart_file)//".restart"
+       vector_file = str(measure_restart_file)//".gs.restart"
        inquire(file=str(file),exist=file_exists)
     endif
     if(present(found))found=file_exists
