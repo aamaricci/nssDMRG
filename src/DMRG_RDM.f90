@@ -379,7 +379,9 @@ contains
     do i=1,size(self%operators)
        !1. Master retrieve operator and check dimensions
        if(MpiMaster)Op  = self%operators%op(index=i)
+#ifdef _MPI
        if(MpiStatus)call Op%bcast()
+#endif
        if( any( [Op%Nrow,Op%Ncol] /= [N,N] ) ) &
             stop "self.renormalize error: shape(Op) != [N,N] N=size(Rho,1)"
        !2. All nodes rotate&truncate

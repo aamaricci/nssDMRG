@@ -629,7 +629,9 @@ contains
           allocate(gs_full(1,Ncol))
        endif
        gs_full=zero
+#ifdef _MPI
        call gather_vector_MPI(MpiComm,gs_vector,gs_full)
+#endif
     else
        allocate(gs_full(Nstates,Ncol))
        gs_full = gs_vector
@@ -741,7 +743,9 @@ contains
        else
           allocate(gs_full(1,Ncol));gs_full=zero
        endif
+#ifdef _MPI
        call scatter_vector_MPI(MpiComm,gs_full,gs_vector)
+#endif
     else
        allocate(gs_full(Nrow,Ncol))
        open(free_unit(unit),file=str(vector_file))
