@@ -1,5 +1,4 @@
 module DMRG_MEASURE
-  USE SCIFOR, only: to_lower
   USE DMRG_GLOBAL
   USE DMRG_CONNECT
   USE DMRG_SUPERBLOCK
@@ -831,7 +830,174 @@ contains
 
   !##################################################################
   !                 MEASURE ENERGY COMPONENTS
-  !##################################################################
+  !##################################################################  
+  !> Convenience wrapper returning Etotal=Ebond+Eloc.  The bond term is
+  !> selected from SiteType: kinetic energy for fermions and exchange
+  !> energy for spins.  Eij and Hi contain the resolved contributions.
+  !>
+  !> Fermions: Etotal=Ekin+Eloc, Eij=Kij.
+  !> Spins   : Etotal=Espin+Eloc, Eij=Jij.
+  !> The reconstructed Etotal provides a direct consistency check with
+  !> the ground-state energy returned by the DMRG diagonalization.
+  subroutine Measure_Energy_DMRG(Hij,Ebond,Eloc,Etotal,Eij,Hi)
+#ifdef _CMPLX
+    complex(8),intent(in)                    :: Hij(:,:)
+#else
+    real(8),intent(in)                       :: Hij(:,:)
+#endif
+    real(8),intent(out)                      :: Ebond,Eloc,Etotal
+    type(sparse_matrix),optional,intent(out) :: Eij,Hi
+    character(len=1)                         :: site_type
+    !
+    if(.not.allocated(dot))stop "Measure_Energy_DMRG ERROR: DMRG sites are not initialized"
+    site_type=to_lower(dot(1)%SiteType(1:1))
+    !The local site type is the single source of dispatch information;
+    !the caller uses the same public entry point for both model classes.
+    select case(site_type)
+    case("f","e")
+       if(present(Eij))then
+          Ebond=Measure_KineticEnergy_DMRG(Hij,Eij)
+       else
+          Ebond=Measure_KineticEnergy_DMRG(Hij)
+       endif
+    case("s")
+       if(present(Eij))then
+          Ebond=Measure_SpinExchangeEnergy_DMRG(Hij,Eij)
+       else
+          Ebond=Measure_SpinExchangeEnergy_DMRG(Hij)
+       endif
+    case default
+       stop "Measure_Energy_DMRG ERROR: unsupported site type"
+    end select
+    !The local contribution is model independent because both standard
+    !site constructors store it with the common key "H".
+    if(present(Hi))then
+       Eloc=Measure_LocalEnergy_DMRG(Hi)
+    else
+       Eloc=Measure_LocalEnergy_DMRG()
+    endif
+    Etotal=Ebond+Eloc
+  end subroutine Measure_Energy_DMRG
+
+
+  !> Return the total kinetic energy for the uniform nearest-neighbour
+  !> hopping matrix Hij.  If requested, Kij contains one entry per
+  !> physical bond in the upper triangle, so that no bond is counted
+  !> twice and Ekin is the sum of its stored values.
+  !>
+  !> Present implementation: the same Hij is used on every nearest-
+  !> neighbour bond.  The sparse output is deliberately site-resolved
+  !> so that a later MATRIX_GRAPH implementation can preserve this API.
+  function Measure_KineticEnergy_DMRG(Hij,Kij) result(Ekin)
+#ifdef _CMPLX
+    complex(8),intent(in)                    :: Hij(:,:)
+#else
+    real(8),intent(in)                       :: Hij(:,:)
+#endif
+    type(sparse_matrix),optional,intent(out) :: Kij
+    real(8)                                  :: Ekin,Eij
+    integer                                  :: i,N
+    !
+    Ekin=0d0
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    N=left%length+right%length
+    if(present(Kij))call Kij%init(N,N)
+    !
+    !Open-chain bonds: (1,2),...,(N-1,N).
+    if(MpiMaster)call start_timer("get Ekin: open-chain")
+    do i=1,N-1
+       Eij=Measure_FermionBond_DMRG(i,i+1,Hij)
+       Ekin=Ekin+Eij
+       if(present(Kij))then
+          if(Eij/=0d0)then
+#ifdef _CMPLX
+             call Kij%insert(cmplx(Eij,0d0,8),i,i+1)
+#else
+             call Kij%insert(Eij,i,i+1)
+#endif
+          endif
+       endif
+       if(MpiMaster)call eta(i,N-1)
+    enddo
+    if(MpiMaster)call stop_timer()
+    !The boundary bond is stored as (1,N), preserving the same
+    !upper-triangular convention used for all open-chain bonds.
+    if(PBCdmrg)then
+      if(MpiMaster)call start_timer("get Ekin: PBC terms")
+       Eij=Measure_FermionBond_DMRG(1,N,Hij)
+       Ekin=Ekin+Eij
+       if(present(Kij))then
+          if(Eij/=0d0)then
+#ifdef _CMPLX
+             call Kij%insert(cmplx(Eij,0d0,8),1,N)
+#else
+             call Kij%insert(Eij,1,N)
+#endif
+          endif
+       endif
+       if(MpiMaster)call stop_timer()
+    endif
+  end function Measure_KineticEnergy_DMRG
+
+
+
+
+  
+
+
+
+
+  !> Measure the complete local Hamiltonian stored with key "H" on
+  !> every site.  No split between quadratic and interacting local
+  !> terms is attempted at this stage.  If requested, Hi is diagonal
+  !> and stores each individual contribution <H_i>.
+  !>
+  !> "H" is the operator constructed by spin_site/electron_site and may
+  !> contain fields, crystal-field terms and local interactions.  Since
+  !> those contributions are already combined, this routine intentionally
+  !> makes no attempt to separate quadratic and interacting pieces.
+  function Measure_LocalEnergy_DMRG(Hi) result(Eloc)
+    type(sparse_matrix),optional,intent(out) :: Hi
+    real(8)                                  :: Eloc,Ei
+    type(sparse_matrix)                      :: Hsite
+    integer                                  :: i,N
+    !
+    Eloc=0d0
+    if(.not.measure_status)call Init_Measure_DMRG()
+    if(.not.measure_status)return
+    N=left%length+right%length
+    if(present(Hi))call Hi%init(N,N)
+    !
+    !Measure every local Hamiltonian in its physical position.  Hi is
+    !diagonal because it is a site-resolved container, not an operator
+    !acting in the many-body Hilbert space.
+    if(MpiMaster)call start_timer("get Eloc")
+    do i=1,N
+       if(.not.dot(i)%operators%has_key("H"))&
+            stop "Measure_LocalEnergy_DMRG ERROR: missing local H operator"
+       Hsite=dot(i)%operators%op("H")
+       Ei=Measure_Op_DMRG(Hsite,i)
+       Eloc=Eloc+Ei
+       if(present(Hi))then
+          if(Ei/=0d0)then
+#ifdef _CMPLX
+             call Hi%insert(cmplx(Ei,0d0,8),i,i)
+#else
+             call Hi%insert(Ei,i,i)
+#endif
+          endif
+       endif
+       call Hsite%free()
+       if(MpiMaster)call eta(i,N)
+    enddo
+    if(MpiMaster)call stop_timer()
+  end function Measure_LocalEnergy_DMRG
+
+
+
+
+
   !> Return the expectation value of one fermionic hopping bond,
   !> using exactly the convention employed by connect_fermion_blocks:
   !> \f[ K_{ij}=\sum_{ab}\left[
@@ -927,63 +1093,6 @@ contains
 #endif
   end function Measure_FermionBond_DMRG
 
-
-
-
-  !> Return the total kinetic energy for the uniform nearest-neighbour
-  !> hopping matrix Hij.  If requested, Kij contains one entry per
-  !> physical bond in the upper triangle, so that no bond is counted
-  !> twice and Ekin is the sum of its stored values.
-  !>
-  !> Present implementation: the same Hij is used on every nearest-
-  !> neighbour bond.  The sparse output is deliberately site-resolved
-  !> so that a later MATRIX_GRAPH implementation can preserve this API.
-  function Measure_KineticEnergy_DMRG(Hij,Kij) result(Ekin)
-#ifdef _CMPLX
-    complex(8),intent(in)                    :: Hij(:,:)
-#else
-    real(8),intent(in)                       :: Hij(:,:)
-#endif
-    type(sparse_matrix),optional,intent(out) :: Kij
-    real(8)                                  :: Ekin,Eij
-    integer                                  :: i,N
-    !
-    Ekin=0d0
-    if(.not.measure_status)call Init_Measure_DMRG()
-    if(.not.measure_status)return
-    N=left%length+right%length
-    if(present(Kij))call Kij%init(N,N)
-    !
-    !Open-chain bonds: (1,2),...,(N-1,N).
-    do i=1,N-1
-       Eij=Measure_FermionBond_DMRG(i,i+1,Hij)
-       Ekin=Ekin+Eij
-       if(present(Kij))then
-          if(Eij/=0d0)then
-#ifdef _CMPLX
-             call Kij%insert(cmplx(Eij,0d0,8),i,i+1)
-#else
-             call Kij%insert(Eij,i,i+1)
-#endif
-          endif
-       endif
-    enddo
-    !The boundary bond is stored as (1,N), preserving the same
-    !upper-triangular convention used for all open-chain bonds.
-    if(PBCdmrg)then
-       Eij=Measure_FermionBond_DMRG(1,N,Hij)
-       Ekin=Ekin+Eij
-       if(present(Kij))then
-          if(Eij/=0d0)then
-#ifdef _CMPLX
-             call Kij%insert(cmplx(Eij,0d0,8),1,N)
-#else
-             call Kij%insert(Eij,1,N)
-#endif
-          endif
-       endif
-    endif
-  end function Measure_KineticEnergy_DMRG
 
 
 
@@ -1111,103 +1220,8 @@ contains
        endif
     endif
   end function Measure_SpinExchangeEnergy_DMRG
-
-
-
-
-  !> Measure the complete local Hamiltonian stored with key "H" on
-  !> every site.  No split between quadratic and interacting local
-  !> terms is attempted at this stage.  If requested, Hi is diagonal
-  !> and stores each individual contribution <H_i>.
-  !>
-  !> "H" is the operator constructed by spin_site/electron_site and may
-  !> contain fields, crystal-field terms and local interactions.  Since
-  !> those contributions are already combined, this routine intentionally
-  !> makes no attempt to separate quadratic and interacting pieces.
-  function Measure_LocalEnergy_DMRG(Hi) result(Eloc)
-    type(sparse_matrix),optional,intent(out) :: Hi
-    real(8)                                  :: Eloc,Ei
-    type(sparse_matrix)                      :: Hsite
-    integer                                  :: i,N
-    !
-    Eloc=0d0
-    if(.not.measure_status)call Init_Measure_DMRG()
-    if(.not.measure_status)return
-    N=left%length+right%length
-    if(present(Hi))call Hi%init(N,N)
-    !
-    !Measure every local Hamiltonian in its physical position.  Hi is
-    !diagonal because it is a site-resolved container, not an operator
-    !acting in the many-body Hilbert space.
-    do i=1,N
-       if(.not.dot(i)%operators%has_key("H"))&
-            stop "Measure_LocalEnergy_DMRG ERROR: missing local H operator"
-       Hsite=dot(i)%operators%op("H")
-       Ei=Measure_Op_DMRG(Hsite,i)
-       Eloc=Eloc+Ei
-       if(present(Hi))then
-          if(Ei/=0d0)then
-#ifdef _CMPLX
-             call Hi%insert(cmplx(Ei,0d0,8),i,i)
-#else
-             call Hi%insert(Ei,i,i)
-#endif
-          endif
-       endif
-       call Hsite%free()
-    enddo
-  end function Measure_LocalEnergy_DMRG
-
-
-
-
-  !> Convenience wrapper returning Etotal=Ebond+Eloc.  The bond term is
-  !> selected from SiteType: kinetic energy for fermions and exchange
-  !> energy for spins.  Eij and Hi contain the resolved contributions.
-  !>
-  !> Fermions: Etotal=Ekin+Eloc, Eij=Kij.
-  !> Spins   : Etotal=Espin+Eloc, Eij=Jij.
-  !> The reconstructed Etotal provides a direct consistency check with
-  !> the ground-state energy returned by the DMRG diagonalization.
-  subroutine Measure_Energy_DMRG(Hij,Ebond,Eloc,Etotal,Eij,Hi)
-#ifdef _CMPLX
-    complex(8),intent(in)                    :: Hij(:,:)
-#else
-    real(8),intent(in)                       :: Hij(:,:)
-#endif
-    real(8),intent(out)                      :: Ebond,Eloc,Etotal
-    type(sparse_matrix),optional,intent(out) :: Eij,Hi
-    character(len=1)                         :: site_type
-    !
-    if(.not.allocated(dot))stop "Measure_Energy_DMRG ERROR: DMRG sites are not initialized"
-    site_type=to_lower(dot(1)%SiteType(1:1))
-    !The local site type is the single source of dispatch information;
-    !the caller uses the same public entry point for both model classes.
-    select case(site_type)
-    case("f","e")
-       if(present(Eij))then
-          Ebond=Measure_KineticEnergy_DMRG(Hij,Eij)
-       else
-          Ebond=Measure_KineticEnergy_DMRG(Hij)
-       endif
-    case("s")
-       if(present(Eij))then
-          Ebond=Measure_SpinExchangeEnergy_DMRG(Hij,Eij)
-       else
-          Ebond=Measure_SpinExchangeEnergy_DMRG(Hij)
-       endif
-    case default
-       stop "Measure_Energy_DMRG ERROR: unsupported site type"
-    end select
-    !The local contribution is model independent because both standard
-    !site constructors store it with the common key "H".
-    if(present(Hi))then
-       Eloc=Measure_LocalEnergy_DMRG(Hi)
-    else
-       Eloc=Measure_LocalEnergy_DMRG()
-    endif
-    Etotal=Ebond+Eloc
-  end subroutine Measure_Energy_DMRG
+  
+  
 
 
 
