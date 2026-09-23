@@ -690,7 +690,19 @@ contains
        inquire(file=str(file),exist=file_exists)
     endif
     if(present(found))found=file_exists
-    if(.not.file_exists)return
+    if(.not.file_exists)then !it will stops in the calling routine
+       if(MpiMaster)then
+          write(LOGfile,*)"sb_load_measure_state: no metadata file at ",str(measure_file)//".restart"
+          write(LOGfile,*)"sb_load_measure_state: no metadata file at ",str(measure_restart_file)//".restart"
+       endif
+       return
+    endif
+    !Metadata and vector must belong to the same checkpoint prefix.
+    inquire(file=str(vector_file),exist=file_exists)
+    if(.not.file_exists)then
+       if(MpiMaster)write(LOGfile,*)"sb_load_measure_state: missing ground-state vector ",str(vector_file)
+       error stop 1
+    endif
     !
     !Read text:
     open(free_unit(unit),file=str(file))
@@ -870,7 +882,6 @@ contains
 
 
 END MODULE DMRG_SUPERBLOCK
-
 
 
 

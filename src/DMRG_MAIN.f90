@@ -123,11 +123,26 @@ contains
   !              RUN DMRG ALGORITHM
   !##################################################################
   subroutine run_DMRG()
+    integer :: directory_status,command_status
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: Launching DMRG"
 #endif
     if(.not.init_called)&
          stop "DMRG ERROR: DMRG not initialized. Call init_dmrg first."
+    !Create checkpoint output only when the DMRG algorithm is requested.
+    directory_status=0
+    if(MpiMaster)then
+       call execute_command_line("mkdir -p "//str(restart_output_dir), &
+            exitstat=directory_status,cmdstat=command_status)
+       if(command_status/=0)directory_status=command_status
+    endif
+#ifdef _MPI
+    if(MpiStatus)call Bcast_MPI(MpiComm,directory_status)
+#endif
+    if(directory_status/=0)then
+       if(MpiMaster)write(LOGfile,*)"run_DMRG: cannot create checkpoint directory ",str(restart_output_dir)
+       error stop 1
+    endif
     !
     select case(to_lower(DMRGtype))
     case('i');call infinite_DMRG()

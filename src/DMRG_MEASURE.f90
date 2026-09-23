@@ -110,11 +110,13 @@ contains
       endif
     endif
     !
-    !Load Measure State (if required) (soft check)
+    !A missing state must not allow measurements on incomplete data.
     if(need_measure_state)then
        call sb_load_measure_state(found_measure_state)
        if(.not.found_measure_state)then
           if(MpiMaster)write(LOGfile,*)"Init_Measure_DMRG: no saved SuperBlock measurement state found."
+          measure_status=.false.
+          error stop 1
        endif
     endif
     !
@@ -2321,7 +2323,6 @@ contains
 
 
 END MODULE DMRG_MEASURE
-
 
 
 

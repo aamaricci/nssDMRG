@@ -169,7 +169,7 @@ contains
     character(len=256) :: lambdaQ_file_
     character(len=256) :: measure_file_
     logical          :: master=.true.
-    integer          :: i,rank=0,add,dim
+    integer          :: i,rank=0,add,dim,timestamp_ierr
     character(len=:),allocatable :: timestamp
 #ifdef _MPI
     if(check_MPI())then
@@ -329,9 +329,13 @@ contains
     call parse_input_variable(block_file_,"BLOCK_FILE",INPUTunit,default='block',&
          comment="Name prefix of the stored block file, used to restart DMRG.")
     timestamp = restart_timestamp()
+#ifdef _MPI
+    if(check_MPI())call MPI_Bcast(timestamp,len(timestamp),MPI_CHARACTER,0,MPI_COMM_WORLD,timestamp_ierr)
+#endif
     restart_input_dir  = "restart/"
     restart_output_dir = "restart_"//str(timestamp)//"/"
-    call execute_command_line("mkdir -p "//str(restart_output_dir))
+    !Only run_DMRG creates the output directory. Measurement-only runs
+    !read restart/ without leaving an empty timestamped checkpoint.
     block_restart_file = str(restart_input_dir)//str(block_file_)
     block_file         = str(restart_output_dir)//str(block_file_)
     call parse_input_variable(umat_file_,"UMAT_FILE",INPUTunit,default='umat',&
