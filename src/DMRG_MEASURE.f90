@@ -833,15 +833,22 @@ contains
   !##################################################################
   !                 MEASURE ENERGY COMPONENTS
   !##################################################################  
-  !> Convenience wrapper returning Etotal=Ebond+Eloc.  The bond term is
-  !> selected from SiteType: kinetic energy for fermions and exchange
-  !> energy for spins.  Eij and Hi contain the resolved contributions.
+  !> Return the energy of the effective DMRG Hamiltonian and split it as
   !>
-  !> Fermions: Etotal=Ekin+Eloc, Eij=Kij.
-  !> Spins   : Etotal=Espin+Eloc, Eij=Jij.
-  !> The reconstructed Etotal provides a direct consistency check with
-  !> the ground-state energy returned by the DMRG diagonalization.
-  subroutine Measure_Energy_DMRG(Hij,Ebond,Eloc,Etotal,Eij,Hi,&
+  !>   Etotal = Ebond + Eloc.
+  !>
+  !> Etotal is evaluated from the Hamiltonians already stored in the two
+  !> final blocks plus the bond(s) connecting them.  This is both faster
+  !> and, after truncation, more accurate than reconstructing every bond
+  !> from physical two-point functions.  In fact, inside a renormalized
+  !> block the projected product (U^+ A U)(U^+ B U) is not generally
+  !> equal to U^+ A B U, whereas the stored block Hamiltonian is exactly
+  !> the operator used in the final superblock diagonalization.
+  !>
+  !> Eloc and its optional site-resolved/components outputs are measured
+  !> independently.  Ebond is then obtained as Etotal-Eloc and includes
+  !> all non-local terms represented by Hij.
+  subroutine Measure_Energy_DMRG(Hij,Ebond,Eloc,Etotal,Hi,&
        H0loc,Hint,Hshift,E0loc,Eint,Eshift)
 #ifdef _CMPLX
     complex(8),intent(in)                    :: Hij(:,:)
@@ -849,53 +856,74 @@ contains
     real(8),intent(in)                       :: Hij(:,:)
 #endif
     real(8),intent(out)                      :: Ebond,Eloc,Etotal
-    type(sparse_matrix),optional,intent(out) :: Eij,Hi
+    type(sparse_matrix),optional,intent(out) :: Hi
     type(sparse_matrix),optional,intent(in)  :: H0loc,Hint,Hshift
     real(8),optional,intent(out)             :: E0loc,Eint,Eshift
+    type(sparse_matrix)                      :: Hleft,Hright
     character(len=1)                         :: site_type
+    real(8)                                  :: Econnect
+    integer                                  :: L,N
     !
     if(.not.allocated(dot))stop "Measure_Energy_DMRG ERROR: DMRG sites are not initialized"
+    if(.not.left%operators%has_key("H"))&
+         stop "Measure_Energy_DMRG ERROR: missing left-block Hamiltonian"
+    if(.not.right%operators%has_key("H"))&
+         stop "Measure_Energy_DMRG ERROR: missing right-block Hamiltonian"
+    !Initialize the measurement and obtain the local contribution first.
+    !The same state/maps are then reused for all remaining contractions.
+    Eloc=Measure_LocalEnergy_DMRG(Hi,H0loc,Hint,Hshift,E0loc,Eint,Eshift)
+    if(.not.measure_status)return
+    L=left%length
+    N=L+right%length
     site_type=to_lower(dot(1)%SiteType(1:1))
-    !The local site type is the single source of dispatch information;
-    !the caller uses the same public entry point for both model classes.
+    !Only the bond(s) joining the final blocks have to be contracted
+    !explicitly; every internal bond is already contained in Hleft/Hright.
+    Econnect=0d0
     select case(site_type)
     case("f","e")
-       if(present(Eij))then
-          Ebond=Measure_KineticEnergy_DMRG(Hij,Eij)
-       else
-          Ebond=Measure_KineticEnergy_DMRG(Hij)
-       endif
+       Econnect=Measure_FermionBond_DMRG(L,L+1,Hij)
+       if(PBCdmrg)Econnect=Econnect+Measure_FermionBond_DMRG(1,N,Hij)
     case("s")
-       if(present(Eij))then
-          Ebond=Measure_SpinExchangeEnergy_DMRG(Hij,Eij)
-       else
-          Ebond=Measure_SpinExchangeEnergy_DMRG(Hij)
-       endif
+       Econnect=Measure_SpinBond_DMRG(L,L+1,Hij)
+       if(PBCdmrg)Econnect=Econnect+Measure_SpinBond_DMRG(1,N,Hij)
     case default
        stop "Measure_Energy_DMRG ERROR: unsupported site type"
     end select
-    !The local contribution is model independent because both standard
-    !site constructors store it with the common key "H".
-    Eloc=Measure_LocalEnergy_DMRG(Hi,H0loc,Hint,Hshift,E0loc,Eint,Eshift)
-    Etotal=Ebond+Eloc
+    !In an MPI run the full block operators are owned by the master.
+    !Broadcast them before the distributed expectation-value kernels.
+#ifdef _MPI
+    if(MpiStatus)then
+       if(MpiMaster)Hleft =left%operators%op("H")
+       if(MpiMaster)Hright=right%operators%op("H")
+       call Hleft%bcast()
+       call Hright%bcast()
+    else
+       Hleft =left%operators%op("H")
+       Hright=right%operators%op("H")
+    endif
+#else
+    Hleft =left%operators%op("H")
+    Hright=right%operators%op("H")
+#endif
+    Etotal=Average_Op_DMRG(Hleft,1)+Average_Op_DMRG(Hright,N)+Econnect
+    Ebond =Etotal-Eloc
+    call Hleft%free()
+    call Hright%free()
   end subroutine Measure_Energy_DMRG
 
 
-  !> Return the total kinetic energy for the uniform nearest-neighbour
-  !> hopping matrix Hij.  If requested, Kij contains one entry per
-  !> physical bond in the upper triangle, so that no bond is counted
-  !> twice and Ekin is the sum of its stored values.
-  !>
-  !> Present implementation: the same Hij is used on every nearest-
-  !> neighbour bond.  The sparse output is deliberately site-resolved
-  !> so that a later MATRIX_GRAPH implementation can preserve this API.
-  function Measure_KineticEnergy_DMRG(Hij,Kij) result(Ekin)
+  !> Reconstruct the total kinetic energy as a sum of physical nearest-
+  !> neighbour correlators for the uniform hopping matrix Hij.  This is
+  !> useful as an observable, but it need not coincide exactly with the
+  !> kinetic part of the truncated effective DMRG Hamiltonian.  Use
+  !> Measure_Energy_DMRG when an energy consistent with the final DMRG
+  !> diagonalization is required.
+  function Measure_KineticEnergy_DMRG(Hij) result(Ekin)
 #ifdef _CMPLX
     complex(8),intent(in)                    :: Hij(:,:)
 #else
     real(8),intent(in)                       :: Hij(:,:)
 #endif
-    type(sparse_matrix),optional,intent(out) :: Kij
     real(8)                                  :: Ekin,Eij
     integer                                  :: i,N
     !
@@ -903,22 +931,12 @@ contains
     if(.not.measure_status)call Init_Measure_DMRG()
     if(.not.measure_status)return
     N=left%length+right%length
-    if(present(Kij))call Kij%init(N,N)
     !
     !Open-chain bonds: (1,2),...,(N-1,N).
     if(MpiMaster)call start_timer("get Ekin: open-chain")
     do i=1,N-1
        Eij=Measure_FermionBond_DMRG(i,i+1,Hij)
        Ekin=Ekin+Eij
-       if(present(Kij))then
-          if(Eij/=0d0)then
-#ifdef _CMPLX
-             call Kij%insert(cmplx(Eij,0d0,8),i,i+1)
-#else
-             call Kij%insert(Eij,i,i+1)
-#endif
-          endif
-       endif
        if(MpiMaster)call eta(i,N-1)
     enddo
     if(MpiMaster)call stop_timer()
@@ -928,15 +946,6 @@ contains
       if(MpiMaster)call start_timer("get Ekin: PBC terms")
        Eij=Measure_FermionBond_DMRG(1,N,Hij)
        Ekin=Ekin+Eij
-       if(present(Kij))then
-          if(Eij/=0d0)then
-#ifdef _CMPLX
-             call Kij%insert(cmplx(Eij,0d0,8),1,N)
-#else
-             call Kij%insert(Eij,1,N)
-#endif
-          endif
-       endif
        if(MpiMaster)call stop_timer()
     endif
   end function Measure_KineticEnergy_DMRG
@@ -984,6 +993,16 @@ contains
     if(.not.measure_status)return
     N=left%length+right%length
     if(present(Hi))call Hi%init(N,N)
+    !When the complete decomposition is supplied and no site-resolved
+    !output is requested, its three O(N) block sums also give Eloc.
+    !Avoid the more expensive propagation of H_i from every position.
+    if(present(H0loc)) E0loc =Measure_LocalTerm_DMRG(H0loc)
+    if(present(Hint))  Eint  =Measure_LocalTerm_DMRG(Hint)
+    if(present(Hshift))Eshift=Measure_LocalTerm_DMRG(Hshift)
+    if(.not.present(Hi).AND.present(H0loc).AND.present(Hint).AND.present(Hshift))then
+       Eloc=E0loc+Eint+Eshift
+       return
+    endif
     !
     !Measure every local Hamiltonian in its physical position.  Hi is
     !diagonal because it is a site-resolved container, not an operator
@@ -1011,9 +1030,6 @@ contains
     !Each scalar component is accumulated as sum_i O_i with one rotation
     !per DMRG growth step.  This is O(N), unlike measuring every site
     !operator independently, which would repeatedly traverse the blocks.
-    if(present(H0loc)) E0loc =Measure_LocalTerm_DMRG(H0loc)
-    if(present(Hint))  Eint  =Measure_LocalTerm_DMRG(Hint)
-    if(present(Hshift))Eshift=Measure_LocalTerm_DMRG(Hshift)
   end function Measure_LocalEnergy_DMRG
 
 
@@ -2429,5 +2445,3 @@ contains
 
 
 END MODULE DMRG_MEASURE
-
-

@@ -18,7 +18,7 @@ program hubbard_1d
   real(8),allocatable                            :: Hlr(:,:),corr(:,:)
 #endif
   type(sparse_matrix),allocatable                :: Cop(:,:),Nop(:,:)
-  type(sparse_matrix)                            :: Docc,Kij,Hi,H0loc,Hint,Hshift
+  type(sparse_matrix)                            :: Docc,Hi,H0loc,Hint,Hshift
   type(sparse_matrix)                            :: Cdag
   real(8),allocatable                            :: dqC(:),dqs(:,:)
 #ifdef _CMPLX
@@ -60,7 +60,9 @@ program hubbard_1d
   call MPI_BARRIER(comm,i)
 #endif
   Nso=Nspin*Norb
-  allocate(MyDot(1));MyDot=electron_site(H0loc=H0loc,Hint=Hint,Hshift=Hshift)
+  allocate(MyDot(1))
+  MyDot=electron_site(H0loc=H0loc,Hint=Hint,Hshift=Hshift)
+  !
   allocate(Hlr(Nso,Nso));Hlr=diag([ts(1:Norb),ts(1:Norb)])
   call init_dmrg(Hlr,ModelDot=MyDot)
   call run_DMRG()
@@ -133,7 +135,7 @@ program hubbard_1d
        error stop "Hubbard product correlation ERROR: density product"
   call Cdag%free()
   !
-  call Measure_Energy_DMRG(Hlr,Ekin,Eloc,Etotal,Kij,Hi,&
+  call Measure_Energy_DMRG(Hlr,Ekin,Eloc,Etotal,Hi,&
        H0loc,Hint,Hshift,E0loc,Eint,Eshift)
   if(abs(Eloc-E0loc-Eint-Eshift)>observable_atol*max(1d0,abs(Eloc)))&
        error stop "Hubbard local-energy decomposition ERROR"
@@ -156,7 +158,6 @@ program hubbard_1d
      enddo
   enddo
   call Docc%free()
-  call Kij%free()
   call Hi%free()
   call H0loc%free()
   call Hint%free()

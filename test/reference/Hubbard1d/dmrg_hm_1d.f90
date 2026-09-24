@@ -12,7 +12,7 @@ program hubbard_1d
   integer                                        :: i,j,unit,iorb,ispin,Nsites
   real(8)                                        :: ts,Mh,lambda,K,Eloc,Etotal,alpha
   type(site)                                     :: MyDot
-  type(sparse_matrix)                            :: Kij,Hi,Docc
+  type(sparse_matrix)                            :: Hi,Docc
   type(sparse_matrix),dimension(:,:),allocatable :: N,C
   real(8),dimension(:,:),allocatable             :: Hloc,Hlr,avLocal,corr
   integer                                        :: irank,comm,rank,ierr
@@ -98,11 +98,10 @@ program hubbard_1d
         close(unit)
      endif
      !
-     !Measure the kinetic, local and reconstructed total energies.
-     !Kij stores one upper-triangular entry for every physical bond,
-     !while Hi stores the local contribution on its diagonal.
+     !Measure the bond, local and total energies.  Hi stores the local
+     !contribution on its diagonal.
      if(master)unit=fopen("K"//str(label_DMRG('u')),append=.true.)
-     call Measure_Energy_DMRG(Hlr,K,Eloc,Etotal,Kij,Hi)
+     call Measure_Energy_DMRG(Hlr,K,Eloc,Etotal,Hi)
      if(master)write(unit,*)K,Eloc,Etotal
      if(master)close(unit)
      !
@@ -124,7 +123,6 @@ program hubbard_1d
      if(master)close(unit)
 
      call End_measure_dmrg()
-     call Kij%free()
      call Hi%free()
      call Docc%free()
      do ispin=1,Nspin
