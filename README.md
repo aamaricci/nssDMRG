@@ -1,6 +1,6 @@
 # nssDMRG 
 
-[![CI DMRG workflow](https://github.com/aamaricci/nssDMRG/actions/workflows/PushWorkflow.yml/badge.svg)](https://github.com/aamaricci/nssDMRG/actions/workflows/PushWorkflow.yml)
+[![CI DMRG workflow](https://github.com/aamaricci/nssDMRG/actions/workflows/PushWorkflow.yml/badge.svg?branch=main-ci)](https://github.com/aamaricci/nssDMRG/actions/workflows/PushWorkflow.yml)
 
 [Not-So-Simple-DMRG]: A High-Performance Massively **Parallel DMRG library** to solve interacting spin-S (Heisenberg) and fermions (Hubbard) models in 1D. The software exploits consevation of Abelian Quantum Numbers (e.g. $S_z$ or $[N_\uparrow,N_\downarrow]$), scalable objects & algorithms with distributed MPI framework to perform *infinite* and *finite* DMRG algorithms, with Open and Periodic Boundary Condition.  
  
