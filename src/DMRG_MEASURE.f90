@@ -21,7 +21,7 @@ module DMRG_MEASURE
   public :: Measure_SpinSpin_DMRG          !get the spin-spin correlation ("s")
   public :: Measure_DensityDensity_DMRG    !get the density-density correlation ("f")
   public :: Measure_FermionBond_DMRG       !get the fermion bond energy E_ij=\sum_ab <t_ijab c_ai.c_bj>+h.c.
-  public :: Measure_KineticEnergy_DMRG     !get the kinetic energy sum_ij E_ij
+  !public :: Measure_KineticEnergy_DMRG     !get the kinetic energy sum_ij E_ij
   public :: Measure_SpinBond_DMRG          !get the spin bond energy E_ij= H.<S_i.S_j>
   public :: Measure_SpinExchangeEnergy_DMRG!get the spin-exchange energy sum_ij E_ij
   public :: Measure_LocalEnergy_DMRG       !get the local energy <H_i> (contains interaction and local terms: crystal field, external fields, etc.)
@@ -845,20 +845,22 @@ contains
   !> equal to U^+ A B U, whereas the stored block Hamiltonian is exactly
   !> the operator used in the final superblock diagonalization.
   !>
-  !> Eloc and its optional site-resolved/components outputs are measured
-  !> independently.  Ebond is then obtained as Etotal-Eloc and includes
-  !> all non-local terms represented by Hij.
-  subroutine Measure_Energy_DMRG(Hij,Ebond,Eloc,Etotal,Hi,&
-       H0loc,Hint,Hshift,E0loc,Eint,Eshift)
+  !> Eloc and its optional scalar components are measured independently.
+  !> Site-resolved local energies are deliberately left to
+  !> Measure_LocalEnergy_DMRG.  Ebond is then obtained as Etotal-Eloc and
+  !> includes all non-local terms represented by Hij.
+  !>
+  !> The optional scalar outputs precede the optional operators so that
+  !> an obsolete positional call passing Kij or Hi fails at compile time.
+  subroutine Measure_Energy_DMRG(Hij,Ebond,Eloc,Etotal,E0loc,Eint,Eshift,H0loc,Hint,Hshift)
 #ifdef _CMPLX
     complex(8),intent(in)                    :: Hij(:,:)
 #else
     real(8),intent(in)                       :: Hij(:,:)
 #endif
     real(8),intent(out)                      :: Ebond,Eloc,Etotal
-    type(sparse_matrix),optional,intent(out) :: Hi
-    type(sparse_matrix),optional,intent(in)  :: H0loc,Hint,Hshift
     real(8),optional,intent(out)             :: E0loc,Eint,Eshift
+    type(sparse_matrix),optional,intent(in)  :: H0loc,Hint,Hshift
     type(sparse_matrix)                      :: Hleft,Hright
     character(len=1)                         :: site_type
     real(8)                                  :: Econnect
@@ -871,7 +873,8 @@ contains
          stop "Measure_Energy_DMRG ERROR: missing right-block Hamiltonian"
     !Initialize the measurement and obtain the local contribution first.
     !The same state/maps are then reused for all remaining contractions.
-    Eloc=Measure_LocalEnergy_DMRG(Hi,H0loc,Hint,Hshift,E0loc,Eint,Eshift)
+    Eloc=Measure_LocalEnergy_DMRG(H0loc=H0loc,Hint=Hint,Hshift=Hshift,&
+         E0loc=E0loc,Eint=Eint,Eshift=Eshift)
     if(.not.measure_status)return
     L=left%length
     N=L+right%length
@@ -912,12 +915,18 @@ contains
   end subroutine Measure_Energy_DMRG
 
 
+
+
+
+
   !> Reconstruct the total kinetic energy as a sum of physical nearest-
   !> neighbour correlators for the uniform hopping matrix Hij.  This is
   !> useful as an observable, but it need not coincide exactly with the
   !> kinetic part of the truncated effective DMRG Hamiltonian.  Use
   !> Measure_Energy_DMRG when an energy consistent with the final DMRG
   !> diagonalization is required.
+  !> USE WITH CAUTION: This function is not returning the correct estimate of the
+  !> kinetic energy...
   function Measure_KineticEnergy_DMRG(Hij) result(Ekin)
 #ifdef _CMPLX
     complex(8),intent(in)                    :: Hij(:,:)
@@ -993,6 +1002,7 @@ contains
     if(.not.measure_status)return
     N=left%length+right%length
     if(present(Hi))call Hi%init(N,N)
+    !
     !When the complete decomposition is supplied and no site-resolved
     !output is requested, its three O(N) block sums also give Eloc.
     !Avoid the more expensive propagation of H_i from every position.
@@ -1003,6 +1013,7 @@ contains
        Eloc=E0loc+Eint+Eshift
        return
     endif
+    !
     !
     !Measure every local Hamiltonian in its physical position.  Hi is
     !diagonal because it is a site-resolved container, not an operator

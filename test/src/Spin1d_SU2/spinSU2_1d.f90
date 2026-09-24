@@ -11,7 +11,7 @@ program dmrg_spin_1d
   character(len=:),allocatable          :: keySz
   integer                               :: i,j,unit,Nsites,comm
   type(site),allocatable                :: MyDot(:)
-  type(sparse_matrix)                   :: Sz,Sz2,Hi
+  type(sparse_matrix)                   :: Sz,Sz2
 #ifdef _CMPLX
   complex(8),allocatable                :: Hlr(:,:)
   complex(8)                            :: corr
@@ -96,7 +96,7 @@ program dmrg_spin_1d
   if(abs(corr-Measure_Corr_DMRG(keySz,keySz,1,Nsites))>observable_atol)&
        error stop "spin product correlation ERROR: L/R contraction"
   !
-  call Measure_Energy_DMRG(Hlr,Espin,Eloc,Etotal,Hi)
+  call Measure_Energy_DMRG(Hlr,Espin,Eloc,Etotal)
   if(master)write(*,*)"Measured energies [Espin,Eloc,Etotal]:",Espin,Eloc,Etotal
   call End_Measure_DMRG()
 
@@ -109,7 +109,6 @@ program dmrg_spin_1d
   endif
 
   call Sz%free();call Sz2%free()
-  call Hi%free()
   call finalize_dmrg()
 #ifdef _MPI
   call finalize_MPI()

@@ -9,7 +9,7 @@ program dmrg_spin_1d
   integer                            :: i,j,SUN,Unit,pos,Nsites
   real(8)                            :: Hvec,Noise,Sij,Espin,Eloc,Etotal
   type(site)                         :: MyDot
-  type(sparse_matrix)                :: Sz,Sz2,Hi
+  type(sparse_matrix)                :: Sz,Sz2
   real(8),dimension(:,:),allocatable :: Hlr
   real(8),dimension(:),allocatable   :: avSz,avSz2
   integer                            :: irank,comm,rank,ierr
@@ -91,8 +91,8 @@ program dmrg_spin_1d
      if(master)close(unit)
 
      !Exchange, local and total energies from the final effective
-     !Hamiltonian.  Hi stores the site-resolved local contribution.
-     call Measure_Energy_DMRG(Hlr,Espin,Eloc,Etotal,Hi)
+     !Hamiltonian.
+     call Measure_Energy_DMRG(Hlr,Espin,Eloc,Etotal)
      if(master)then
         unit=fopen("Ecomponents"//str(label_DMRG('u')),append=.true.)
         write(unit,*)Espin,Eloc,Etotal
@@ -101,7 +101,6 @@ program dmrg_spin_1d
      call End_Measure_DMRG()
      call Sz%free()
      call Sz2%free()
-     call Hi%free()
   endif
 
   if(master)then

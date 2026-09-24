@@ -18,7 +18,7 @@ program hubbard_1d
   real(8),allocatable                            :: Hlr(:,:),corr(:,:)
 #endif
   type(sparse_matrix),allocatable                :: Cop(:,:),Nop(:,:)
-  type(sparse_matrix)                            :: Docc,Hi,H0loc,Hint,Hshift
+  type(sparse_matrix)                            :: Docc,H0loc,Hint,Hshift
   type(sparse_matrix)                            :: Cdag
   real(8),allocatable                            :: dqC(:),dqs(:,:)
 #ifdef _CMPLX
@@ -135,8 +135,9 @@ program hubbard_1d
        error stop "Hubbard product correlation ERROR: density product"
   call Cdag%free()
   !
-  call Measure_Energy_DMRG(Hlr,Ekin,Eloc,Etotal,Hi,&
-       H0loc,Hint,Hshift,E0loc,Eint,Eshift)
+  call Measure_Energy_DMRG(Hlr,Ekin,Eloc,Etotal,&
+       E0loc=E0loc,Eint=Eint,Eshift=Eshift,&
+       H0loc=H0loc,Hint=Hint,Hshift=Hshift)
   if(abs(Eloc-E0loc-Eint-Eshift)>observable_atol*max(1d0,abs(Eloc)))&
        error stop "Hubbard local-energy decomposition ERROR"
   if(master)write(*,*)"Measured energies [Ekin,Eloc,Etotal]:",Ekin,Eloc,Etotal
@@ -158,7 +159,6 @@ program hubbard_1d
      enddo
   enddo
   call Docc%free()
-  call Hi%free()
   call H0loc%free()
   call Hint%free()
   call Hshift%free()
