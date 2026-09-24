@@ -358,19 +358,20 @@ logical                                   :: master=.true.
   !##################################################################
   !##################################################################
   !Fock = [|0,0>,|1,0>,|0,1>,|1,1>] <- |up,dw> <- cycle UP first 1_dw x 1_up
-  function electron_site(hloc) result(self)
+  function electron_site(hloc,H0loc,Hint,Hshift) result(self)
 #ifdef _CMPLX
     complex(8),dimension(Nspin*Norb,Nspin*Norb),optional :: hloc  
     complex(8),dimension(Nspin*Norb,Nspin*Norb)          :: hloc_
-    complex(8),dimension(:,:),allocatable                :: H,P
+    complex(8),dimension(:,:),allocatable                :: H,P,H0_,Hint_,Hshift_
     complex(8),dimension(:,:),allocatable                :: Op
 #else
     real(8),dimension(Nspin*Norb,Nspin*Norb),optional    :: hloc  
     real(8),dimension(Nspin*Norb,Nspin*Norb)             :: hloc_
-    real(8),dimension(:,:),allocatable                   :: H,P
+    real(8),dimension(:,:),allocatable                   :: H,P,H0_,Hint_,Hshift_
     real(8),dimension(:,:),allocatable                   :: Op
 #endif
     type(site)                                           :: self
+    type(sparse_matrix),optional,intent(out)              :: H0loc,Hint,Hshift
     integer,dimension(:),allocatable                     :: Basis
     integer                                              :: iorb,ispin
     character(len=:),allocatable                         :: key
@@ -421,8 +422,15 @@ logical                                   :: master=.true.
     !
     !
     !> Build local Hamiltonian:
-    H   = build_Hlocal_operator(hloc_)
+    H = build_Hlocal_operator(hloc_,H0_,Hint_,Hshift_)
     call self%put("H",sparse(H),"bosonic",dq=dq0)
+    !The resolved local-energy operators are returned to the caller but
+    !are deliberately not inserted in the site's operator list.  They
+    !therefore bypass the block-growth workflow and are evolved only by
+    !DMRG_MEASURE when their expectation values are explicitly requested.
+    if(present(H0loc)) H0loc =sparse(H0_)
+    if(present(Hint))  Hint  =sparse(Hint_)
+    if(present(Hshift))Hshift=sparse(Hshift_)
     !
     !> Build all the C operators: OBC/PBC_next
     do ispin=1,2

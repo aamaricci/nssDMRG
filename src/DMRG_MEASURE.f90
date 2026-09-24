@@ -841,7 +841,8 @@ contains
   !> Spins   : Etotal=Espin+Eloc, Eij=Jij.
   !> The reconstructed Etotal provides a direct consistency check with
   !> the ground-state energy returned by the DMRG diagonalization.
-  subroutine Measure_Energy_DMRG(Hij,Ebond,Eloc,Etotal,Eij,Hi)
+  subroutine Measure_Energy_DMRG(Hij,Ebond,Eloc,Etotal,Eij,Hi,&
+       H0loc,Hint,Hshift,E0loc,Eint,Eshift)
 #ifdef _CMPLX
     complex(8),intent(in)                    :: Hij(:,:)
 #else
@@ -849,6 +850,8 @@ contains
 #endif
     real(8),intent(out)                      :: Ebond,Eloc,Etotal
     type(sparse_matrix),optional,intent(out) :: Eij,Hi
+    type(sparse_matrix),optional,intent(in)  :: H0loc,Hint,Hshift
+    real(8),optional,intent(out)             :: E0loc,Eint,Eshift
     character(len=1)                         :: site_type
     !
     if(.not.allocated(dot))stop "Measure_Energy_DMRG ERROR: DMRG sites are not initialized"
@@ -873,11 +876,7 @@ contains
     end select
     !The local contribution is model independent because both standard
     !site constructors store it with the common key "H".
-    if(present(Hi))then
-       Eloc=Measure_LocalEnergy_DMRG(Hi)
-    else
-       Eloc=Measure_LocalEnergy_DMRG()
-    endif
+    Eloc=Measure_LocalEnergy_DMRG(Hi,H0loc,Hint,Hshift,E0loc,Eint,Eshift)
     Etotal=Ebond+Eloc
   end subroutine Measure_Energy_DMRG
 
@@ -951,21 +950,36 @@ contains
 
 
   !> Measure the complete local Hamiltonian stored with key "H" on
-  !> every site.  No split between quadratic and interacting local
-  !> terms is attempted at this stage.  If requested, Hi is diagonal
-  !> and stores each individual contribution <H_i>.
+  !> every site.  If local Fock-space operators H0loc, Hint or Hshift
+  !> are supplied, their extensive expectation values are evaluated
+  !> independently and returned through the matching optional scalar.
   !>
   !> "H" is the operator constructed by spin_site/electron_site and may
-  !> contain fields, crystal-field terms and local interactions.  Since
-  !> those contributions are already combined, this routine intentionally
-  !> makes no attempt to separate quadratic and interacting pieces.
-  function Measure_LocalEnergy_DMRG(Hi) result(Eloc)
+  !> contain fields, crystal-field terms and local interactions.  The
+  !> optional component operators never enter LIST_OPERATORS or BLOCK:
+  !> they are propagated only here, along the stored DMRG growth path.
+  !>
+  !> H0loc and Hshift are one-body operators and could alternatively be
+  !> obtained from a local 1RDM.  Propagating the already contracted local
+  !> operators is cheaper when that complete 1RDM is not otherwise needed.
+  function Measure_LocalEnergy_DMRG(Hi,H0loc,Hint,Hshift,E0loc,Eint,Eshift) result(Eloc)
     type(sparse_matrix),optional,intent(out) :: Hi
+    type(sparse_matrix),optional,intent(in)  :: H0loc,Hint,Hshift
+    real(8),optional,intent(out)             :: E0loc,Eint,Eshift
     real(8)                                  :: Eloc,Ei
     type(sparse_matrix)                      :: Hsite
     integer                                  :: i,N
     !
     Eloc=0d0
+    if(present(E0loc))E0loc=0d0
+    if(present(Eint))Eint=0d0
+    if(present(Eshift))Eshift=0d0
+    if(present(E0loc).neqv.present(H0loc))&
+         stop "Measure_LocalEnergy_DMRG ERROR: H0loc and E0loc must be supplied together"
+    if(present(Eint).neqv.present(Hint))&
+         stop "Measure_LocalEnergy_DMRG ERROR: Hint and Eint must be supplied together"
+    if(present(Eshift).neqv.present(Hshift))&
+         stop "Measure_LocalEnergy_DMRG ERROR: Hshift and Eshift must be supplied together"
     if(.not.measure_status)call Init_Measure_DMRG()
     if(.not.measure_status)return
     N=left%length+right%length
@@ -994,7 +1008,99 @@ contains
        if(MpiMaster)call eta(i,N)
     enddo
     if(MpiMaster)call stop_timer()
+    !Each scalar component is accumulated as sum_i O_i with one rotation
+    !per DMRG growth step.  This is O(N), unlike measuring every site
+    !operator independently, which would repeatedly traverse the blocks.
+    if(present(H0loc)) E0loc =Measure_LocalTerm_DMRG(H0loc)
+    if(present(Hint))  Eint  =Measure_LocalTerm_DMRG(Hint)
+    if(present(Hshift))Eshift=Measure_LocalTerm_DMRG(Hshift)
   end function Measure_LocalEnergy_DMRG
+
+
+
+
+  !Measure the extensive sum of one uniform local operator.  The input
+  !matrix acts in the original site Fock basis and is never stored in a
+  !site or block operator list.
+  function Measure_LocalTerm_DMRG(Olocal) result(Eterm)
+    type(sparse_matrix),intent(in) :: Olocal
+    type(sparse_matrix)            :: Oleft,Oright
+    real(8)                        :: Eterm
+    integer                        :: i,N
+    N=left%length+right%length
+    do i=1,N
+       if(Olocal%Nrow/=dot(i)%Dim.OR.Olocal%Ncol/=dot(i)%Dim)&
+            stop "Measure_LocalTerm_DMRG ERROR: incompatible local-operator dimension"
+    enddo
+    Oleft =Build_LocalSum_Block_DMRG(Olocal,'l')
+    Oright=Build_LocalSum_Block_DMRG(Olocal,'r')
+    Eterm=Average_Op_DMRG(Oleft,1)+Average_Op_DMRG(Oright,N)
+    call Oleft%free()
+    call Oright%free()
+  end function Measure_LocalTerm_DMRG
+
+
+
+
+  !Build sum_i O_i directly in the final basis of one DMRG block.  At
+  !each growth step the accumulated operator is first rotated with the
+  !stored U matrix and then enlarged by adding O on the new local site.
+  function Build_LocalSum_Block_DMRG(Olocal,side) result(Osum)
+    type(sparse_matrix),intent(in) :: Olocal
+    character(len=1),intent(in)    :: side
+    type(sparse_matrix)            :: Osum,Osite,U,Oold,Onew
+    integer                        :: L,R,nstep,it,D,Dsite
+    L=left%length
+    R=right%length
+    select case(side)
+    case('l');nstep=L
+    case('r');nstep=R
+    case default;stop "Build_LocalSum_Block_DMRG ERROR: side not in [l,r]"
+    end select
+    Osum=Olocal
+    do it=1,nstep-1
+       select case(side)
+       case('l');if(MpiMaster)U=left%omatrices%op(key=str(it))
+       case('r');if(MpiMaster)U=right%omatrices%op(key=str(it))
+       end select
+#ifdef _MPI
+       if(MpiStatus)then
+          call U%bcast()
+          Osum=(U%dgr().pm.Osum).pm.U
+       else
+          Osum=matmul(matmul(U%dgr(),Osum),U)
+       endif
+#else
+       Osum=matmul(matmul(U%dgr(),Osum),U)
+#endif
+       D=Osum%Nrow
+       Dsite=Olocal%Nrow
+       Osite=Olocal
+       select case(side)
+       case('l')
+          if(PBCdmrg.AND.mod(it,2)==0)then
+             Oold=Id(Dsite).x.Osum
+             Onew=Osite.x.Id(D)
+          else
+             Oold=Osum.x.Id(Dsite)
+             Onew=Id(D).x.Osite
+          endif
+       case('r')
+          if(PBCdmrg.AND.mod(it,2)==0)then
+             Oold=Osum.x.Id(Dsite)
+             Onew=Id(D).x.Osite
+          else
+             Oold=Id(Dsite).x.Osum
+             Onew=Osite.x.Id(D)
+          endif
+       end select
+       Osum=Oold+Onew
+       call Osite%free()
+       call Oold%free()
+       call Onew%free()
+    enddo
+    call U%free()
+  end function Build_LocalSum_Block_DMRG
 
 
 
@@ -2323,7 +2429,5 @@ contains
 
 
 END MODULE DMRG_MEASURE
-
-
 
 

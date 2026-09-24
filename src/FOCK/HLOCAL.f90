@@ -61,7 +61,7 @@ MODULE HLOCAL
   public :: Build_BasisStates
   public :: Build_FermionicSign
   public :: Get_QNdimension
-  
+
 contains
 
 
@@ -309,14 +309,16 @@ contains
   !+-------------------------------------------------------------------+
   !PURPOSE: 
   !+-------------------------------------------------------------------+
-  function build_Hlocal_operator(H) result(Hmat)
+  function build_Hlocal_operator(H,H0loc,Hint,Hshift) result(Hmat)
 #ifdef _CMPLX
-    complex(8),dimension(:,:)               :: H    ![Nspin*Norb,Nspin*Norb]
+    complex(8),dimension(:,:),intent(in)     :: H    ![Nspin*Norb,Nspin*Norb]
     complex(8),dimension(:,:),allocatable   :: Hmat
+    complex(8),dimension(:,:),allocatable,intent(out) :: H0loc,Hint,Hshift
     complex(8)                              :: htmp
 #else
-    real(8),dimension(:,:)                  :: H    ![Nspin*Norb,Nspin*Norb]
+    real(8),dimension(:,:),intent(in)        :: H    ![Nspin*Norb,Nspin*Norb]
     real(8),dimension(:,:),allocatable      :: Hmat
+    real(8),dimension(:,:),allocatable,intent(out) :: H0loc,Hint,Hshift
     real(8)                                 :: htmp
 #endif
     complex(8),dimension(Nspin,Nspin,Ns,Ns) :: Hloc
@@ -332,14 +334,8 @@ contains
 #ifdef _MPI
     if(check_MPI())master  = get_master_MPI()
 #endif
-
-#ifdef _CMPLX
-    if(master)write(*,*)"Using CMPLX code"
-    call wait(1000)
-#endif
     !
-    if(allocated(Hmat))deallocate(Hmat)
-    allocate(Hmat(Nfock,Nfock))
+    allocate(Hmat(Nfock,Nfock),H0loc(Nfock,Nfock),Hint(Nfock,Nfock),Hshift(Nfock,Nfock))
     !
     call assert_shape(H,[Nspin*Ns,Nspin*Ns],"build_hlocal_operator","Hloc")
     !
@@ -348,7 +344,7 @@ contains
     case default
        do ispin=1,Nspin
           do iorb=1,Norb
-             io = iorb+(ispin-1)*Norb      
+             io = iorb+(ispin-1)*Norb
              do jorb=1,Norb
                 jo = jorb + (ispin-1)*Norb
                 Hloc(ispin,ispin,iorb,jorb) = H(io,jo)
@@ -359,7 +355,7 @@ contains
        do ispin=1,Nspin
           do jspin=1,Nspin
              do iorb=1,Norb
-                io = iorb+(ispin-1)*Norb      
+                io = iorb+(ispin-1)*Norb
                 do jorb=1,Norb
                    jo = jorb + (jspin-1)*Norb
                    Hloc(ispin,jspin,iorb,jorb) = H(io,jo)
@@ -372,6 +368,9 @@ contains
     !
     !
     Hmat=zero
+    H0loc=zero
+    Hint=zero
+    Hshift=zero
     do isector=1,Nsectors
        call Build_LocalFock_Sector(isector,SectorI)
        do i=1,sectorI%Dim
@@ -389,6 +388,7 @@ contains
              htmp = htmp + Hloc(Nspin,Nspin,io,io)*ndw(io)
           enddo
           Hmat(ii,ii)=Hmat(ii,ii) + htmp
+          H0loc(ii,ii)=H0loc(ii,ii) + htmp
           !
           !========================================================
           !       LOCAL INTERACTION Hubbard-Kanamori
@@ -418,8 +418,11 @@ contains
                 enddo
              enddo
           endif
-          !if using the Hartree-shifted chemical potential: mu=0 for half-filling
-          !sum up the contributions of hartree terms:
+          Hmat(ii,ii)=Hmat(ii,ii) + htmp
+          Hint(ii,ii)=Hint(ii,ii) + htmp
+          !If using the Hartree-shifted chemical potential, collect its
+          !one-body correction separately from the genuine interaction.
+          htmp=zero
           if(hfmode)then
              do io=1,Ns
                 htmp = htmp - 0.5d0*Uloc(io)*(nup(io)+ndw(io))
@@ -435,6 +438,7 @@ contains
           endif
           !
           Hmat(ii,ii)=Hmat(ii,ii) + htmp
+          Hshift(ii,ii)=Hshift(ii,ii) + htmp
           !
           !========================================================
           !Non-Diagonal: SPIN-EXCHANGE (S-E) and PAIR-HOPPING TERMS
@@ -458,6 +462,7 @@ contains
                       jj   = k4+1
                       htmp = one*Jx*sg1*sg2*sg3*sg4
                       Hmat(ii,jj)=Hmat(ii,jj) + htmp
+                      Hint(ii,jj)=Hint(ii,jj) + htmp
                    endif
                 enddo
              enddo
@@ -483,6 +488,7 @@ contains
                       jj   = k4+1
                       htmp = one*Jp*sg1*sg2*sg3*sg4
                       Hmat(ii,jj)=Hmat(ii,jj) + htmp
+                      Hint(ii,jj)=Hint(ii,jj) + htmp
                    endif
                 enddo
              enddo
@@ -502,6 +508,7 @@ contains
                    jj = k2+1
                    htmp = conjg(Hloc(1,1,io,jo))*sg1*sg2
                    Hmat(ii,jj)=Hmat(ii,jj) + htmp
+                   H0loc(ii,jj)=H0loc(ii,jj) + htmp
                 endif
              enddo
           enddo
@@ -517,6 +524,7 @@ contains
                    jj = k2+1
                    htmp = conjg(Hloc(Nspin,Nspin,io,jo))*sg1*sg2
                    Hmat(ii,jj)=Hmat(ii,jj) + htmp
+                   H0loc(ii,jj)=H0loc(ii,jj) + htmp
                 endif
              enddo
           enddo
@@ -538,6 +546,7 @@ contains
                       jj   = k2+1
                       htmp = conjg(Hloc(1,2,iorb,jorb))*sg1*sg2
                       Hmat(ii,jj)=Hmat(ii,jj) + htmp
+                      H0loc(ii,jj)=H0loc(ii,jj) + htmp
                    endif
                    !
                    !
@@ -549,6 +558,7 @@ contains
                       jj   = k2+1
                       htmp = conjg(Hloc(2,1,iorb,jorb))*sg1*sg2
                       Hmat(ii,jj)=Hmat(ii,jj) + htmp
+                      H0loc(ii,jj)=H0loc(ii,jj) + htmp
                    endif
                 enddo
              enddo
@@ -567,6 +577,7 @@ contains
                          jj   = k2+1
                          htmp = conjg(Hloc(ispin,jspin,iorb,jorb))*sg1*sg2
                          Hmat(ii,jj)=Hmat(ii,jj) + htmp
+                         H0loc(ii,jj)=H0loc(ii,jj) + htmp
                       endif
                    enddo
                 enddo
@@ -578,23 +589,36 @@ contains
        call Delete_LocalFock_Sector(sectorI)
        !
     enddo
-  end function build_hlocal_operator
+    if(maxval(abs(Hmat-H0loc-Hint-Hshift))>1d-12)&
+         error stop "build_Hlocal_operator ERROR: inconsistent decomposition"
+  end function build_Hlocal_operator
+
+
+
+
+
+
+
+
+
+
+
 
 
 
 
 
   function build_C_operator(iorb,ispin) result(Cmat)
-    integer                               :: iorb,ispin
-    type(local_fock_sector)               :: sectorI
+    integer                                       :: iorb,ispin
+    type(local_fock_sector)                       :: sectorI
 #ifdef _CMPLX
-    complex(8),dimension(:,:),allocatable :: Cmat
+    complex(8),dimension(:,:),allocatable         :: Cmat
 #else
-    real(8),dimension(:,:),allocatable    :: Cmat
+    real(8),dimension(:,:),allocatable            :: Cmat
 #endif
-    real(8)                               :: c_
-    integer                               :: isector,i,m,l,Dim
-    integer                               :: nvec(2*Ns),alfa
+    real(8)                                       :: c_
+    integer                                       :: isector,i,m,l,Dim
+    integer                                       :: nvec(2*Ns),alfa
     !
     if(iorb<1.OR.iorb>Ns)stop "build_C_operator error: iorb<1 OR iorb>Ns. check."
     if(ispin<1.OR.ispin>2)stop "build_C_operator error: ispin<1 OR ispin>2. check."
@@ -621,18 +645,18 @@ contains
 
 
 
-  
+
   function build_Cdg_operator(iorb,ispin) result(CDGmat)
-    integer                               :: iorb,ispin
-    type(local_fock_sector)               :: sectorI
+    integer                                       :: iorb,ispin
+    type(local_fock_sector)                       :: sectorI
 #ifdef _CMPLX
-    complex(8),dimension(:,:),allocatable :: CDGmat
+    complex(8),dimension(:,:),allocatable         :: CDGmat
 #else
-    real(8),dimension(:,:),allocatable    :: CDGmat
+    real(8),dimension(:,:),allocatable            :: CDGmat
 #endif
-    real(8)                               :: cdg_
-    integer                               :: isector,i,m,l,Dim
-    integer                               :: nvec(2*Ns),alfa
+    real(8)                                       :: cdg_
+    integer                                       :: isector,i,m,l,Dim
+    integer                                       :: nvec(2*Ns),alfa
     !
     if(iorb<1.OR.iorb>Ns)stop "build_CDG_operator error: iorb<1 OR iorb>Ns. check."
     if(ispin<1.OR.ispin>2)stop "build_CDG_operator error: ispin<1 OR ispin>2. check."
@@ -659,16 +683,16 @@ contains
 
 
   function build_Dens_operator(iorb,ispin) result(Dmat)
-    integer                               :: ispin,iorb
-    type(local_fock_sector)               :: sectorI
+    integer                                       :: ispin,iorb
+    type(local_fock_sector)                       :: sectorI
 #ifdef _CMPLX
-    complex(8),dimension(:,:),allocatable :: Dmat
+    complex(8),dimension(:,:),allocatable         :: Dmat
 #else
-    real(8),dimension(:,:),allocatable :: Dmat
+    real(8),dimension(:,:),allocatable            :: Dmat
 #endif
-    real(8)                               :: dens
-    integer                               :: imp,isector,i,m,Dim
-    integer                               :: nvec(2*Ns),alfa
+    real(8)                                       :: dens
+    integer                                       :: imp,isector,i,m,Dim
+    integer                                       :: nvec(2*Ns),alfa
     !
     if(iorb<1.OR.iorb>Ns)stop "build_Dens_operator error: iorb<1 OR iorb>Ns. check."
     if(ispin<1.OR.ispin>2)stop "build_Dens_operator error: ispin<1 OR ispin>2. check."
@@ -700,8 +724,8 @@ contains
   !##################################################################
   !##################################################################
   subroutine Write_FockStates()
-    integer,dimension(:),allocatable :: Hvec
-    integer                          :: i,iup,idw,Nup,Ndw,NN
+    integer,dimension(:),allocatable              :: Hvec
+    integer                                       :: i,iup,idw,Nup,Ndw,NN
     !
     if(allocated(Hvec))deallocate(Hvec)
     !
@@ -733,8 +757,8 @@ contains
   !##################################################################
   !##################################################################
   function Build_BasisStates() result(Hvec)
-    integer,dimension(:),allocatable :: Hvec
-    integer                          :: i,iup,idw,Nup,Ndw,NN
+    integer,dimension(:),allocatable              :: Hvec
+    integer                                       :: i,iup,idw,Nup,Ndw,NN
     !
     if(allocated(Hvec))deallocate(Hvec)
     !
@@ -767,12 +791,12 @@ contains
   !##################################################################
   function Build_FermionicSign() result(P)
 #ifdef _CMPLX
-    complex(8),dimension(:,:),allocatable :: P
+    complex(8),dimension(:,:),allocatable         :: P
 #else
-    real(8),dimension(:,:),allocatable :: P
+    real(8),dimension(:,:),allocatable            :: P
 #endif
-    integer,dimension(:),allocatable   :: Hvec
-    integer                            :: i,iup,idw,Nup,Ndw,NN
+    integer,dimension(:),allocatable              :: Hvec
+    integer                                       :: i,iup,idw,Nup,Ndw,NN
     !
     if(allocated(Hvec))deallocate(Hvec)
     !
@@ -791,23 +815,23 @@ contains
 
 
   function Get_QNdimension() result(dim)
-    integer :: dim
+    integer                                       :: dim
     select case(dmrg_mode)
     case default;dim=2
     case("superc","nonsu2");dim=1
     end select
   end function Get_QNdimension
 
-  
+
   !##################################################################
   !##################################################################
   !               RETRIEVE INFO PROCEDURES: Nup,Ndw,DimUp,DimDw
   !##################################################################
   !##################################################################
   subroutine get_Nup(isector,Nup)
-    integer              :: isector,Nup(1)
-    integer              :: i,count
-    integer,dimension(2) :: indices_
+    integer                                       :: isector,Nup(1)
+    integer                                       :: i,count
+    integer,dimension(2)                          :: indices_
     count=isector-1
     do i=1,2
        indices_(i) = mod(count,Ns+1)
@@ -818,9 +842,9 @@ contains
 
 
   subroutine get_Ndw(isector,Ndw)
-    integer              :: isector,Ndw(1)
-    integer              :: i,count
-    integer,dimension(2) :: indices_
+    integer                                       :: isector,Ndw(1)
+    integer                                       :: i,count
+    integer,dimension(2)                          :: indices_
     count=isector-1
     do i=1,2
        indices_(i) = mod(count,Ns+1)
@@ -831,30 +855,30 @@ contains
 
 
   subroutine  get_DimUp(isector,DimUps)
-    integer                :: isector,DimUps(1)
-    integer                :: Nups(1)
+    integer                                       :: isector,DimUps(1)
+    integer                                       :: Nups(1)
     call get_Nup(isector,Nups)
     DimUps(1) = binomial(Ns,Nups(1))
   end subroutine get_DimUp
 
 
   subroutine get_DimDw(isector,DimDws)
-    integer                :: isector,DimDws(1)
-    integer                :: Ndws(1)
+    integer                                       :: isector,DimDws(1)
+    integer                                       :: Ndws(1)
     call get_Ndw(isector,Ndws)
     DimDws(1) = binomial(Ns,Ndws(1))
   end subroutine get_DimDw
 
 
   function get_normal_sector_dimension(n,m) result(dim)
-    integer,intent(in) :: n,m
-    integer            :: dim
+    integer,intent(in)                            :: n,m
+    integer                                       :: dim
     dim = binomial(n,m)
   end function get_normal_sector_dimension
 
   function get_superc_sector_dimension(mz) result(dim)
-    integer :: mz
-    integer :: i,dim,Nb
+    integer                                       :: mz
+    integer                                       :: i,dim,Nb
     dim=0
     Nb=Ns-mz
     do i=0,Nb/2 
@@ -863,8 +887,8 @@ contains
   end function get_superc_sector_dimension
 
   function get_nonsu2_sector_dimension(n) result(dim)
-    integer :: n
-    integer :: dim
+    integer                                       :: n
+    integer                                       :: dim
     dim=binomial(2*Ns,n)
   end function get_nonsu2_sector_dimension
 
@@ -882,11 +906,11 @@ contains
   !   the sign of |out> has the phase convention, pos labels the sites
   !+-------------------------------------------------------------------+
   subroutine c(pos,in,out,fsgn)
-    integer,intent(in)    :: pos
-    integer,intent(in)    :: in
-    integer,intent(inout) :: out
-    real(8),intent(inout) :: fsgn    
-    integer               :: l
+    integer,intent(in)                            :: pos
+    integer,intent(in)                            :: in
+    integer,intent(inout)                         :: out
+    real(8),intent(inout)                         :: fsgn
+    integer                                       :: l
     if(.not.btest(in,pos-1))stop "C error: C_i|...0_i...>"
     fsgn=1d0
     do l=1,pos-1
@@ -896,11 +920,11 @@ contains
   end subroutine c
 
   subroutine cdg(pos,in,out,fsgn)
-    integer,intent(in)    :: pos
-    integer,intent(in)    :: in
-    integer,intent(inout) :: out
-    real(8),intent(inout) :: fsgn    
-    integer               :: l
+    integer,intent(in)                            :: pos
+    integer,intent(in)                            :: in
+    integer,intent(inout)                         :: out
+    real(8),intent(inout)                         :: fsgn
+    integer                                       :: l
     if(btest(in,pos-1))stop "C^+ error: C^+_i|...1_i...>"
     fsgn=1d0
     do l=1,pos-1
@@ -922,8 +946,8 @@ contains
   !(corresponds to the decomposition of the number i-1)
   !+------------------------------------------------------------------+
   function bdecomp(i,Ntot) result(ivec)
-    integer :: Ntot,ivec(Ntot),l,i
-    logical :: busy
+    integer                                       :: Ntot,ivec(Ntot),l,i
+    logical                                       :: busy
     !this is the configuration vector |1,..,Ns,Ns+1,...,Ntot>
     !obtained from binary decomposition of the state/number i\in 2^Ntot
     do l=0,Ntot-1
@@ -940,9 +964,9 @@ contains
   !(corresponds to the recomposition of the number i-1)
   !+------------------------------------------------------------------+
   function bjoin(ib,Ntot) result(i)
-    integer                 :: Ntot
-    integer,dimension(Ntot) :: ib
-    integer                 :: i,j
+    integer                                       :: Ntot
+    integer,dimension(Ntot)                       :: ib
+    integer                                       :: i,j
     i=0
     do j=0,Ntot-1
        i=i+ib(j+1)*2**j
@@ -957,9 +981,9 @@ contains
   !PURPOSE  : calculate the binomial factor n1 over n2
   !+------------------------------------------------------------------+
   elemental function binomial(n1,n2) result(nchoos)
-    integer,intent(in) :: n1,n2
-    real(8)            :: xh
-    integer            :: i
+    integer,intent(in)                            :: n1,n2
+    real(8)                                       :: xh
+    integer                                       :: i
     integer nchoos
     xh = 1.d0
     if(n2<0) then
@@ -983,17 +1007,17 @@ contains
   !##################################################################
   !##################################################################
   subroutine map_allocate_scalar(H,N)
-    type(sector_map) :: H
-    integer          :: N
+    type(sector_map)                              :: H
+    integer                                       :: N
     if(H%status) call map_deallocate_scalar(H)
     allocate(H%map(N))
     H%status=.true.
   end subroutine map_allocate_scalar
   !
   subroutine map_allocate_vector(H,N)
-    type(sector_map),dimension(:)       :: H
-    integer,dimension(size(H))          :: N
-    integer                             :: i
+    type(sector_map),dimension(:)                 :: H
+    integer,dimension(size(H))                    :: N
+    integer                                       :: i
     do i=1,size(H)
        call map_allocate_scalar(H(i),N(i))
     enddo
@@ -1001,8 +1025,8 @@ contains
 
 
   subroutine map_deallocate_scalar(H)
-    type(sector_map) :: H
-    logical :: master=.true.
+    type(sector_map)                              :: H
+    logical                                       :: master=.true.
     !
 #ifdef _MPI
     if(check_MPI())master  = get_master_MPI()
@@ -1016,8 +1040,8 @@ contains
   end subroutine map_deallocate_scalar
   !
   subroutine map_deallocate_vector(H)
-    type(sector_map),dimension(:) :: H
-    integer                       :: i
+    type(sector_map),dimension(:)                 :: H
+    integer                                       :: i
     do i=1,size(H)
        call map_deallocate_scalar(H(i))
     enddo
@@ -1033,23 +1057,23 @@ contains
   !##################################################################
   !##################################################################  
   subroutine print_conf(i,Ntot,advance)
-    integer :: dim,i,j,Ntot
-    logical :: advance
-    integer :: ivec(Ntot)
-    logical :: master=.true.
+    integer                                       :: dim,i,j,Ntot
+    logical                                       :: advance
+    integer                                       :: ivec(Ntot)
+    logical                                       :: master=.true.
     !
 #ifdef _MPI
     if(check_MPI())master  = get_master_MPI()
 #endif
     ivec = bdecomp(i,Ntot)
     if(master)then
-      write(LOGfile,"(A1)",advance="no")"|"
-      write(LOGfile,"(10I1)",advance="no")(ivec(j),j=1,Ntot)
-      if(advance)then
-         write(LOGfile,"(A1)",advance="yes")">"
-      else
-         write(LOGfile,"(A1)",advance="no")">"
-      endif
+       write(LOGfile,"(A1)",advance="no")"|"
+       write(LOGfile,"(10I1)",advance="no")(ivec(j),j=1,Ntot)
+       if(advance)then
+          write(LOGfile,"(A1)",advance="yes")">"
+       else
+          write(LOGfile,"(A1)",advance="no")">"
+       endif
     endif
   end subroutine print_conf
 
@@ -1077,15 +1101,15 @@ program testHLOCAL
   USE AUX_FUNCS
   USE HLOCAL
   implicit none
-  character(len=64)                     :: finput
+  character(len=64)                               :: finput
 #ifdef _CMPLX
-  complex(8),dimension(:,:),allocatable :: Docc,Cup,Cdw,CDGup,CDGdw,Dens,Hlocal,P
-  complex(8),dimension(:,:),allocatable :: hloc
+  complex(8),dimension(:,:),allocatable           :: Docc,Cup,Cdw,CDGup,CDGdw,Dens,Hlocal,H0loc,Hint,Hshift,P
+  complex(8),dimension(:,:),allocatable           :: hloc
 #else
-  real(8),dimension(:,:),allocatable :: Docc,Cup,Cdw,CDGup,CDGdw,Dens,Hlocal,P
-  real(8),dimension(:,:),allocatable :: hloc
+  real(8),dimension(:,:),allocatable              :: Docc,Cup,Cdw,CDGup,CDGdw,Dens,Hlocal,H0loc,Hint,Hshift,P
+  real(8),dimension(:,:),allocatable              :: hloc
 #endif
-  integer,dimension(:),allocatable      :: Hvec
+  integer,dimension(:),allocatable                :: Hvec
 
   call parse_cmd_variable(finput,"FINPUT",default='DMRG.conf')  
   call read_input(finput)
@@ -1108,7 +1132,9 @@ program testHLOCAL
 
   print*,""
   print*,"H:"
-  Hlocal = build_Hlocal_operator(hloc)
+  Hlocal=build_Hlocal_operator(hloc,H0loc,Hint,Hshift)
+  if(maxval(abs(Hlocal-H0loc-Hint-Hshift))>1d-12)&
+       error stop "build_Hlocal_operator ERROR: inconsistent decomposition"
   call print_matrix(Hlocal)
 
 
@@ -1186,18 +1212,18 @@ contains
 
 
   recursive function KSz(n) result(A)
-    integer, intent(in) :: n
-    real(8)          :: A(2**n, 2**n)
-    integer             :: d(2**n)
-    integer             :: i
+    integer, intent(in)                           :: n
+    real(8)                                       :: A(2**n, 2**n)
+    integer                                       :: d(2**n)
+    integer                                       :: i
     d = szvec(n)
     A = zero
     forall(i=1:2**n)A(i,i) = one*d(i)
   end function KSz
 
   recursive function szvec(n) result(vec)
-    integer,intent(in)      :: n
-    integer,dimension(2**n) :: vec
+    integer,intent(in)                            :: n
+    integer,dimension(2**n)                       :: vec
     if(n==1)then
        vec = [1,-1]
     else
@@ -1208,9 +1234,3 @@ contains
 
 end program testHLOCAL
 #endif
-
-
-
-
-
-

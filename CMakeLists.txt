@@ -52,7 +52,7 @@ INCLUDE(${CMAKE_MODULE_PATH}/MpiConfig.cmake)
 ############################################################
 # Find Scifor
 FIND_PACKAGE(PkgConfig)
-PKG_SEARCH_MODULE(SCIFOR REQUIRED scifor)
+PKG_SEARCH_MODULE(SCIFOR REQUIRED IMPORTED_TARGET GLOBAL scifor)
 IF(${SCIFOR_FOUND})
   MESSAGE(STATUS "SciFortran found ${SCIFOR_INCLUDE_DIRS}")
 ELSE()
@@ -166,6 +166,11 @@ ADD_LIBRARY(dmrg STATIC
   $<TARGET_OBJECTS:BLOCKS_LIB>
   $<TARGET_OBJECTS:DMRG_LIB>
 )
+
+# SciFortran is a public dependency of the static DMRG library.  Using
+# the imported pkg-config target preserves its complete link interface,
+# including BLACS/ScaLAPACK in MPI builds, for every final executable.
+TARGET_LINK_LIBRARIES(dmrg PUBLIC PkgConfig::SCIFOR)
 
 
 ############################################################
