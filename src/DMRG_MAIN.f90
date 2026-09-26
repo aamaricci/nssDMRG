@@ -83,10 +83,31 @@ contains
   !              FINALIZE DMRG ALGORITHM
   !##################################################################
   subroutine finalize_dmrg()
-    integer :: ilat
+    integer :: ilat,command_status,exit_status
+    logical :: restart_exists
+    character(len=:),allocatable :: restart_dir,restart_archive
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: Finalize DMRG"
 #endif
+    !Archive the checkpoint produced by this run before releasing the DMRG state.
+    !Keep the directory if tar fails, so that a usable restart is not lost.
+    if(MpiMaster .and. allocated(restart_output_dir))then
+       restart_dir = trim(str(restart_output_dir))
+       if(len_trim(restart_dir)>0 .and. restart_dir(len_trim(restart_dir):len_trim(restart_dir))=="/")&
+            restart_dir = restart_dir(:len_trim(restart_dir)-1)
+       inquire(file=restart_dir//"/.",exist=restart_exists)
+       if(restart_exists)then
+          restart_archive = restart_dir//".tgz"
+          call execute_command_line("tar -czf "//restart_archive//" "//restart_dir//" && rm -rf -- "//restart_dir,&
+               wait=.true.,exitstat=exit_status,cmdstat=command_status)
+          if(command_status/=0)exit_status=command_status
+          if(exit_status==0)then
+             write(LOGfile,*)"finalize_dmrg: archived restart in ",restart_archive
+          else
+             write(LOGfile,*)"finalize_dmrg WARNING: cannot archive restart directory ",restart_dir
+          endif
+       endif
+    endif
     if(allocated(HopH))deallocate(HopH)    
     do ilat=1,iNlat
        call dot(ilat)%free()
