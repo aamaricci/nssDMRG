@@ -191,6 +191,10 @@ contains
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: end measure"
 #endif
+    !Measure_DMRG finalizes its own measurement session.  Make an
+    !additional explicit call harmless instead of accessing state that
+    !has already been released (in particular the allocatable string).
+    if(.not.measure_status)return
     if(MpiMaster)call stop_timer("Done "//str(string))
     if(allocated(string))deallocate(string)
     if(allocated(Olist))deallocate(Olist)
