@@ -26,6 +26,7 @@ The structure of this code is largely inspired by the excellent simple-DMRG proj
   - [Milestone 10](#milestone10) Fix Symmetry Fragmentation using MPI sub-communicators.
   - [Milestone 11](#milestone11) Lazy direct MVP operator filtering.
   - [Milestone 12](#milestone12) Memory management and further optimizations. Fix restart and checkpointing.
+  - [Milestone 13](#milestone13) Change in the QN target definition.
 - [Results](#results)
     
 ## <a name="dependencies"></a> Dependencies
@@ -248,52 +249,37 @@ Using several input variables we can now control how the results of the calculat
 On top of that this version includes a number of optimizations and bug fixes which removed linear growing of memory footprint with the number of DMRG steps. Larger calculations can now be performed with a reasonable memory footprint, while the restart and checkpointing functionality is now fully working.
 
 
+### <a name="milestone13"></a> Milestone 13
+- [x] Change in the QN target definition.
+- [x] Input variables `QN_DENSITY` and `QN_OFFSET` replace the old `DMRG_QN` and `QNTYPE` records.
 
-## Target quantum numbers
+The new input variable `QN_DENSITY` sets the background charge per site and `QN_OFFSET` adds a fixed
+total change: 
 
-`QN_DENSITY` sets the background charge per site and `QN_OFFSET` adds a fixed
-total change: `Q = int(L * QN_DENSITY) + QN_OFFSET`. Both vectors have `QNDIM`
-entries and default to zero. Density includes all orbitals; offsets are not
-multiplied by `NORB` or by the local spin.
+`Q = int(L * QN_DENSITY) + QN_OFFSET`. 
 
-For one-orbital fermions, half filling plus one up electron is:
+Both vectors have `QNDIM` entries and default to zero. **For fermions density includes all orbitals, while offsets are not multiplied by `NORB` or by the local spin**.
 
+Example: for one-orbital fermions, half filling plus one up electron is:
 ```text
 QN_DENSITY = 0.5, 0.5
 QN_OFFSET  = 1.0, 0.0
 ```
+Quarter filling uses density `0.25,0.25` and zero offsets. 
 
-Quarter filling uses density `0.25,0.25` and zero offsets. Noncommensurate
-lengths are accepted: `rho=1/3` at `L=8` gives two particles. Truncation is
-unchanged, including numerical effects: `0.33333333 * 6` gives one.
+Non-commensurate lengths are accepted, e.g. `rho=1/3` at `L=8` gives two particles. Truncation is unchanged, including numerical effects: `0.33333333 * 6` gives one.
 
-For both spin-1/2 and spin-1 chains, density zero and offset one select total
-`Sz=1`. Reversing a spin-1/2 changes `Sz` by one, not one half. An offset of
-`0.5` is impossible on four spin-1/2 sites, whose total `Sz` is integer.
-Changing the target selects another sector, not a specific excited wavefunction.
+For both spin-1/2 and spin-1 chains, density zero and offset one select total `Sz=1` as reversing a spin-1/2 changes `Sz` by one. An offset of `0.5` is impossible on four spin-1/2 sites, whose total `Sz` is integer. Changing the target selects another sector, not a specific excited wavefunction.
 Fermion `normal` mode uses `(N_up,N_down)`, `nonsu2` their sum, and `superc`
 their difference, equal to `2*Sz`.
 
-With equal local QN limits, the final target is checked before growth or restart
-loading. Five up electrons on four one-orbital sites, or `Sz=0.5` on four
-spin-1/2 sites, fail immediately. During growth only, targets exceeding those
-limits are temporarily reduced and logged: density `0.5` plus offset `3` uses
-four up electrons at `L=4`, then the requested six at `L=6`. The final target is
-never corrected. No fixed cutoff on the offset is imposed.
+There a number of checks on the target. The requested total QN is compared to the local limits, which are set by the number of sites and orbitals. With equal local QN limits, the final target is checked before growth or restart loading. Five up electrons on four one-orbital sites, or `Sz=0.5` on four spin-1/2 sites, fail immediately. During growth only, targets exceeding those limits are temporarily reduced and logged: density `0.5` plus offset `3` uses
+four up electrons at `L=4`, then the requested six at `L=6`. The final target is never corrected. No fixed cutoff on the offset is imposed.
 
-Same site family does not mean same QN limits. Different fields are fine;
-spin-1/2 and spin-1 both use type `SPIN` and physical `Sz`, but their limits
-differ. For mixed limits, early final checks and temporary corrections are
-disabled; superblock construction checks the actual states. Three spin-1/2
-sites plus one spin-1 site allow `Sz=0.5` but not `Sz=0`. Small mixed-spin
-examples agree with exact diagonalization; arbitrary ordering, measurements
-and mixed-chain restarts remain unvalidated. Spin/fermion mixtures are rejected.
-Custom bases with missing QN combinations also require the superblock check.
-Truncation can cause a missing sector too: blocks retaining only `Sz=0,1`
-cannot form total `Sz=-1`; the code reports this rather than changing the target.
+Same site family does not mean same QN limits. Different fields are fine; spin-1/2 and spin-1 both use type `SPIN` and physical `Sz`, but their limits differ. For mixed limits, early final checks and temporary corrections are disabled; superblock construction checks the actual states. Three spin-1/2 sites plus one spin-1 site allow `Sz=0.5` but not `Sz=0`. Small mixed-spin examples agree with exact diagonalization; arbitrary ordering, measurements and mixed-chain restarts remain unvalidated. Spin/fermion mixtures are rejected.
+Custom bases with missing QN combinations also require the superblock check. Truncation can cause a missing sector too: blocks retaining only `Sz=0,1` cannot form total `Sz=-1`; the code reports this rather than changing the target.
 
-The old `QNTYPE` and `DMRG_QN` records are removed. Migrate `local` inputs to
-density `old_DMRG_QN * NORB` with zero offset, and `global` inputs to zero density
+The old `QNTYPE` and `DMRG_QN` records are removed. Migrate `local` inputs to density `old_DMRG_QN * NORB` with zero offset, and `global` inputs to zero density
 with the previous effective target as offset. Restart formats are unchanged;
 continuation requires matching the old targets. `mainSep25` keeps the old code.
 
