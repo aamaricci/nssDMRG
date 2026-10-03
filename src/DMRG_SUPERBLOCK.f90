@@ -227,7 +227,12 @@ contains
     if(total_states==0)then
        if(MpiMaster) call stop_timer("Build SB states")
        t_sb_get_states=t_stop()
-       stop "sb_get_states ERROR: total_states=0. There are no SB states."
+       if(MpiMaster)then
+          write(LOGfile,*)"No retained superblock states for target:",current_target_QN
+          write(LOGfile,*)"Length:",current_L," density:",target_density," offset:",target_offset
+          write(LOGfile,*)"Check charge integrality, physical bounds and retained block sectors."
+       endif
+       error stop "sb_get_states ERROR: requested QN sector is empty"
     else
        if(MpiMaster)write(LOGfile,*)"Total States:",total_states
     endif
@@ -869,14 +874,24 @@ contains
 
 
   subroutine sb_set_current_qn()
+    real(8),allocatable :: requested(:),lower(:),upper(:)
     current_L         = left%length + right%length
-    select case(str(to_lower(QNtype(1:1))))
-    case default;stop "DMRG_MAIN error: QNtype != [local,global]"
-    case("l")
-       current_target_QN = int(target_qn*current_L*Norb)
-    case("g")
-       current_target_QN = min(current_L,int(target_qn*Norb)) !to check
-    end select
+    !Preserve truncation toward zero of the density contribution.
+    !Do not truncate the offset: spin charges may be half-integer.
+    requested = dble(int(target_density*current_L)) + target_offset
+    current_target_QN=requested
+    if(target_uniform_bounds.and.current_L<2*Ldmrg)then
+       lower=current_L*target_site_min
+       upper=current_L*target_site_max
+       current_target_QN=max(lower,min(upper,requested))
+       if(any(current_target_QN/=requested).and.MpiMaster)then
+          write(LOGfile,*)"Warm-up QN clipping at length:",current_L
+          write(LOGfile,*)"Requested target:",requested
+          write(LOGfile,*)"Effective target:",current_target_QN
+       endif
+    endif
+    !Mixed local charge bounds cannot be reconstructed safely from a block length.
+    !Leave those targets unchanged rather than use truncated block-sector bounds.
   end subroutine sb_set_current_qn
 
 

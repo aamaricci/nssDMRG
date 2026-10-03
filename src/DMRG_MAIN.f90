@@ -27,6 +27,7 @@ contains
 #endif
     type(site),dimension(:)     :: ModelDot
     integer                     :: ilat,i,f,m
+    real(8),allocatable         :: local_min(:),local_max(:),local_qn(:)
     !
     !
 #ifdef _MPI
@@ -61,7 +62,28 @@ contains
     call validate_model_dq(Hij)
     !
     !SETUP the initial DMRG structure
-    allocate(target_qn, source=DMRG_QN)
+    allocate(target_density, source=QN_density)
+    allocate(target_offset, source=QN_offset)
+    !Physical bounds come from untruncated site bases, never retained blocks.
+    allocate(target_site_min(size(target_density)),target_site_max(size(target_density)))
+    target_site_min=huge(1d0);target_site_max=-huge(1d0)
+    target_uniform_bounds=.true.
+    allocate(local_min(size(target_density)),local_max(size(target_density)))
+    do ilat=1,size(dot)
+       local_min=huge(1d0)
+       local_max=-huge(1d0)
+       do i=1,size(dot(ilat)%sectors(1))
+          local_qn=dot(ilat)%sectors(1)%qn(index=i)
+          local_min=min(local_min,local_qn)
+          local_max=max(local_max,local_qn)
+       enddo
+       if(ilat==1)then
+          target_site_min=local_min;target_site_max=local_max
+       else
+          if(any(abs(local_min-target_site_min)>1d-12).or.&
+             any(abs(local_max-target_site_max)>1d-12))target_uniform_bounds=.false.
+       endif
+    enddo
     init_left   = block(dot(1))
     init_right  = block(dot(1))
     !
@@ -123,6 +145,11 @@ contains
     call sb_sector%free()
     if(allocated(gs_vector))deallocate(gs_vector)
     if(allocated(sb_states))deallocate(sb_states)
+    if(allocated(target_density))deallocate(target_density)
+    if(allocated(target_offset))deallocate(target_offset)
+    if(allocated(target_site_min))deallocate(target_site_min)
+    if(allocated(target_site_max))deallocate(target_site_max)
+    if(allocated(current_target_QN))deallocate(current_target_QN)
     init_called  = .false.
     !
     call reset_profile()
@@ -394,6 +421,10 @@ contains
             "Enlarged Blocks Dim                  :",m_eleft,m_eright
        write(LOGfile,"(A,"//str(size(current_target_QN))//"F24.15)")&
             "Target_QN                            :",current_target_QN
+       write(LOGfile,"(A,"//str(size(target_density))//"F24.15)")&
+            "QN density per site                  :",target_density
+       write(LOGfile,"(A,"//str(size(target_offset))//"F24.15)")&
+            "QN total offset                      :",target_offset
        write(LOGfile,"(A,I12)")&
             "SuperBlock Length                    :",current_L
        write(LOGfile,"(A,3x,G24.15)")&
@@ -420,15 +451,8 @@ contains
     !
     if(MpiMaster)then
        write(LOGfile,*)"- - - - - - - - - - - - - - - - - - - - -"
-       select case(str(to_lower(QNtype(1:1))))
-       case default;stop "DMRG_MAIN error: QNtype != [local,global]"
-       case("l")
-          write(LOGfile,"(A,"//str(Lanc_Neigen)//"F24.15)")&
-               "Energies/N                           :",gs_energy/sum(current_target_QN)
-       case("g")
-          write(LOGfile,"(A,"//str(Lanc_Neigen)//"F24.15)")&
-               "Energies/L                           :",gs_energy/current_L
-       end select
+       write(LOGfile,"(A,"//str(Lanc_Neigen)//"F24.15)")&
+            "Energies/L                           :",gs_energy/current_L
        write(LOGfile,*)"- - - - - - - - - - - - - - - - - - - - -"
     endif
     !
@@ -512,8 +536,9 @@ contains
     character(len=:),allocatable         :: site_type,reference_type
     character(len=:),allocatable         :: pkey,ikey,jkey,refkey
     !
-    qDim=size(DMRG_QN)
-    if(qDim<=0)stop "validate_model_dq ERROR: empty DMRG_QN"
+    qDim=size(QN_density)
+    if(qDim<=0)stop "validate_model_dq ERROR: empty QN_DENSITY"
+    if(size(QN_offset)/=qDim)error stop "validate_model_dq ERROR: QN_OFFSET dimension mismatch"
     Nlinks=1;if(PBCdmrg)Nlinks=2
     reference_type=to_lower(str(dot(1)%type()))
     !
@@ -835,7 +860,7 @@ END MODULE DMRG_MAIN
 !   !    Build SUPER-BLOCK Sector
 !   !#################################
 !   current_L         = left%length + right%length
-!   current_target_QN = int(target_qn*current_L*Norb)
+!   current_target_QN = int(target_density*current_L) + target_offset
 !   write(LOGfile,"(A22,I12)")"SuperBlock Length = ",current_L
 !   write(LOGfile,"(A22,"//str(size(current_target_QN))//"F12.7)")"Target_QN = ",current_target_QN
 !   write(LOGfile,"(A22,G12.7)")"Total         = ",sum(current_target_QN)

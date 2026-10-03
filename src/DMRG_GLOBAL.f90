@@ -59,7 +59,9 @@ MODULE DMRG_GLOBAL
   !
   real(8)                                        :: truncation_error_left,truncation_error_right
   character(len=:),allocatable                   :: suffix
-  real(8),dimension(:),allocatable               :: target_Qn,current_target_QN
+  real(8),dimension(:),allocatable               :: target_density,target_offset,current_target_QN
+  real(8),dimension(:),allocatable               :: target_site_min,target_site_max
+  logical                                       :: target_uniform_bounds
   integer                                        :: current_L
   type(block)                                    :: init_left,init_right
   logical                                        :: init_called=.false.

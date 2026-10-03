@@ -50,8 +50,8 @@ define DMRGCONF
  ESWEEP=0.d0                                   !!list of error threshold for each sweep in a finite DMRG algorithm.
  DMRG_MODE=normal                              !Flag to set DMRG type: normal=normal, superc=superconductive, nonsu2=broken SU(2)
  QNDIM=2                                       !Total  conserved abelian quantum numbers to consider.
- QNTYPE=local                                  !Type of conserved Quantum Numbers, local: q in [0,1], global: Q in [-Ldmrg,Ldmrg]
- DMRG_QN=5.000000000E-01,5.000000000E-01       !Target Sector QN in units specified by QNtype
+ QN_DENSITY=5.000000000E-01,5.000000000E-01 !Reference charge per site
+ QN_OFFSET=0.d0,0.d0 !Length-independent total charge
  NORB=1                                        !Number of impurity orbitals.
  ULOC=2.000000000                              !Values of the local interaction per orbital
  UST=0.d0                                      !Value of the inter-orbital interaction term
