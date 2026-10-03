@@ -249,6 +249,55 @@ On top of that this version includes a number of optimizations and bug fixes whi
 
 
 
+## Target quantum numbers
+
+`QN_DENSITY` sets the background charge per site and `QN_OFFSET` adds a fixed
+total change: `Q = int(L * QN_DENSITY) + QN_OFFSET`. Both vectors have `QNDIM`
+entries and default to zero. Density includes all orbitals; offsets are not
+multiplied by `NORB` or by the local spin.
+
+For one-orbital fermions, half filling plus one up electron is:
+
+```text
+QN_DENSITY = 0.5, 0.5
+QN_OFFSET  = 1.0, 0.0
+```
+
+Quarter filling uses density `0.25,0.25` and zero offsets. Noncommensurate
+lengths are accepted: `rho=1/3` at `L=8` gives two particles. Truncation is
+unchanged, including numerical effects: `0.33333333 * 6` gives one.
+
+For both spin-1/2 and spin-1 chains, density zero and offset one select total
+`Sz=1`. Reversing a spin-1/2 changes `Sz` by one, not one half. An offset of
+`0.5` is impossible on four spin-1/2 sites, whose total `Sz` is integer.
+Changing the target selects another sector, not a specific excited wavefunction.
+Fermion `normal` mode uses `(N_up,N_down)`, `nonsu2` their sum, and `superc`
+their difference, equal to `2*Sz`.
+
+With equal local QN limits, the final target is checked before growth or restart
+loading. Five up electrons on four one-orbital sites, or `Sz=0.5` on four
+spin-1/2 sites, fail immediately. During growth only, targets exceeding those
+limits are temporarily reduced and logged: density `0.5` plus offset `3` uses
+four up electrons at `L=4`, then the requested six at `L=6`. The final target is
+never corrected. No fixed cutoff on the offset is imposed.
+
+Same site family does not mean same QN limits. Different fields are fine;
+spin-1/2 and spin-1 both use type `SPIN` and physical `Sz`, but their limits
+differ. For mixed limits, early final checks and temporary corrections are
+disabled; superblock construction checks the actual states. Three spin-1/2
+sites plus one spin-1 site allow `Sz=0.5` but not `Sz=0`. Small mixed-spin
+examples agree with exact diagonalization; arbitrary ordering, measurements
+and mixed-chain restarts remain unvalidated. Spin/fermion mixtures are rejected.
+Custom bases with missing QN combinations also require the superblock check.
+Truncation can cause a missing sector too: blocks retaining only `Sz=0,1`
+cannot form total `Sz=-1`; the code reports this rather than changing the target.
+
+The old `QNTYPE` and `DMRG_QN` records are removed. Migrate `local` inputs to
+density `old_DMRG_QN * NORB` with zero offset, and `global` inputs to zero density
+with the previous effective target as offset. Restart formats are unchanged;
+continuation requires matching the old targets. `mainSep25` keeps the old code.
+
+
 ## <a name="results"></a> Results
 Here are some results for the Heisenberg model:  
 
@@ -366,68 +415,3 @@ The software is provided as it is and can be read and copied, in agreement with
 the Terms of Service of GITHUB. 
 
 You should have received a copy of the GNU LGPL along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
-## Target quantum numbers
-
-Specify two vectors of length `QNDIM`:
-
-```text
-QN_DENSITY = 0.5, 0.5
-QN_OFFSET  = 1.0, 0.0
-```
-
-At each superblock length `L` the target is computed componentwise as
-`Q = int(L * QN_DENSITY) + QN_OFFSET`. Density is the reference conserved
-charge **per site, summed over all orbitals**. Offset is a length-independent
-total excess charge. The density contribution is truncated toward zero,
-following the previous density-target convention; the offset is never truncated.
-Both vectors default to zero.
-
-| Local model | Target components and units |
-| --- | --- |
-| Spin | Physical total `Sz`; local spin-1/2 labels are +/- 0.5 |
-| Fermions, `normal` | `N_up, N_down` |
-| Fermions, `nonsu2` | `N_up + N_down` |
-| Fermions, `superc` | `N_up - N_down = 2 Sz` |
-
-For one orbital, half filling plus one up electron uses the example above.
-A spin chain with fixed `Sz=1` uses `QN_DENSITY=0` and `QN_OFFSET=1`.
-Quarter filling per species uses density `0.25,0.25` and zero offsets.
-For two orbitals at half filling, the densities are `1,1`.
-Offsets must lie on the charge lattice of the actual chain: fermionic offsets
-are integers, while spin offsets can be half-integer when the chain permits it.
-
-Incommensurate densities retain the historical truncation behavior, including
-floating-point effects: `0.33333333 * 6` is below 2 and truncates to 1.
-No rounding tolerance or exact-density requirement at the final length is added.
-For sites with identical local charge bounds, a target outside the physical range
-is clipped to that range during growth (`L < 2*LDMRG`), with requested and effective
-charges printed in the log. The final target is never clipped. Bounds come from
-the original site bases, not from retained block sectors. For mixed local bounds,
-clipping is disabled: the current block format does not retain site composition.
-An unavailable target stops with the length, density, offset and effective charges
-in the diagnostic, including physically possible sectors lost by truncation.
-
-### Migrating existing inputs and restarting
-
-`QNTYPE` and `DMRG_QN` have been removed. Old records in input files are rejected
-explicitly to avoid accidentally continuing in a default sector.
-For old `QNTYPE=local`, set `QN_DENSITY = old_DMRG_QN * NORB` and zero offsets.
-For old `QNTYPE=global`, use zero densities and offsets in the physical charge
-units (the old code applied `int(old_DMRG_QN * NORB)` and an upper clamp).
-Where that clamp or truncation affected the old target, migration requires
-checking the effective charges printed by the previous run.
-
-The block, rotation-matrix and measurement-state checkpoint formats and file
-names are unchanged. Existing checkpoints can be read after migrating the input;
-continuing the same physical calculation requires preserving its effective target
-sequence. In particular, fixed spin targets now preserve their supplied value
-and are not truncated. Temporary physical clipping during growth is logged. `mainSep25` retains the previous code
-and input conventions for ongoing calculations.
-
-The small-chain QN test checks analytic Heisenberg and free-fermion spectra,
-measured charges, error diagnostics, post-processing, and resumed calculations.
-To additionally verify checkpoints generated by the previous version, run
-`test/qn_shift_checks.py NEW_DRIVER SCRATCH_DIRECTORY OLD_DRIVER`, where the old
-driver is `test/src/qn_shift.f90` linked against `mainSep25`.

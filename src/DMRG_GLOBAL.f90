@@ -61,11 +61,11 @@ MODULE DMRG_GLOBAL
   character(len=:),allocatable                   :: suffix
   real(8),dimension(:),allocatable               :: target_density,target_offset,current_target_QN
   real(8),dimension(:),allocatable               :: target_site_min,target_site_max
-  logical                                       :: target_uniform_bounds
+  logical                                        :: target_uniform_bounds
   integer                                        :: current_L
   type(block)                                    :: init_left,init_right
   logical                                        :: init_called=.false.
-	logical                                       :: dims_set=.false.
+	logical                                        :: dims_set=.false.
 #ifdef _CMPLX
   complex(8),dimension(:,:),allocatable          :: gs_vector
 #else
@@ -226,6 +226,114 @@ MODULE DMRG_GLOBAL
 
 
 contains
+
+  !Initialize the target QNs, find the local limits, and check the final target.
+  !Call after the sites are ready, before constructing blocks or loading a restart.
+  subroutine setup_target_qn()
+    integer             :: ilat,i,check,nchecks,length
+    real(8),allocatable :: local_min(:),local_max(:),local_qn(:)
+    real(8),allocatable :: requested(:),lower(:),upper(:),lattice_index(:)
+    logical             :: unit_charge_grid,outside,off_lattice
+    real(8),parameter   :: tol=1d-12
+    !
+    allocate(target_density, source=QN_density)
+    allocate(target_offset, source=QN_offset)
+    !Find the smallest and largest QN allowed on each site.
+    !Use all states of the original local basis, before DMRG truncation.
+    !Examples for one site (one orbital for fermions):
+    !  spin 1/2: Sz from -1/2 to +1/2;
+    !  normal:   n_up and n_down each from 0 to 1;
+    !  nonsu2:   n_up+n_down from 0 to 2;
+    !  superc:   n_up-n_down from -1 to 1 (this equals 2*Sz).
+    !If every site has the same limits, the limits for L sites are L times these.
+    !Fields and interactions may differ between sites: only the QN limits matter.
+    !If the limits differ, block length alone is not enough to find the totals.
+    !In that case we leave the target unchanged and check it when building the SB.
+    allocate(target_site_min(size(target_density)))
+    allocate(target_site_max(size(target_density)))
+    !Start from large values; the scan below replaces them with the actual limits.
+    target_site_min= huge(1d0)
+    target_site_max=-huge(1d0)
+    target_uniform_bounds=.true.
+    unit_charge_grid=.true.
+    allocate(local_min(size(target_density)))
+    allocate(local_max(size(target_density)))
+    do ilat=1,size(dot)
+       local_min= huge(1d0)
+       local_max=-huge(1d0)
+       do i=1,size(dot(ilat)%sectors(1))
+          local_qn =dot(ilat)%sectors(1)%qn(index=i)
+          local_min=min(local_min,local_qn)
+          local_max=max(local_max,local_qn)
+       enddo
+       !Check that QNs change in steps of one and no combinations are missing.
+       !For normal fermions the four combinations are (0,0), (1,0), (0,1), (1,1).
+       !For spin 1/2 the values are -1/2 and +1/2: their difference is also one.
+       !With these bases we can check the allowed total QNs before running DMRG.
+       !For a custom basis with missing combinations, the SB check is still needed.
+       do i=1,size(dot(ilat)%sectors(1))
+          local_qn=dot(ilat)%sectors(1)%qn(index=i)-local_min
+          if(any(abs(local_qn-anint(local_qn))>1d-12))unit_charge_grid=.false.
+       enddo
+       if(abs(product(local_max-local_min+1d0)-dble(size(dot(ilat)%sectors(1))))>1d-12)&
+            unit_charge_grid=.false.
+       if(ilat==1)then
+          target_site_min=local_min
+          target_site_max=local_max
+       else
+          !Ignore differences smaller than 1d-12 when comparing site limits.
+          !This tolerance does not change how INT(L*rho) is calculated.
+          if(any(abs(local_min-target_site_min)>1d-12).or.&
+             any(abs(local_max-target_site_max)>1d-12))target_uniform_bounds=.false.
+       endif
+    enddo
+    !Check the final target now, before loading a restart or starting DMRG.
+    !The check uses INT(L*rho)+offset. An approximate density is fine:
+    !rho=1/3 does not require L to be a multiple of three.
+    !
+    !With equal site limits, check that the final target lies between L*q_min
+    !and L*q_max. For the standard bases, also check that it is an allowed QN.
+    !For example, electron numbers must be integers; three spin-1/2 sites
+    !can have Sz=1/2, but not Sz=0.
+    if(.not.target_uniform_bounds)then
+       if(MpiMaster)write(LOGfile,*)&
+            "Final QN precheck unavailable for mixed local charge bounds; SB construction checks the sector."
+       return
+    endif
+    nchecks=1
+    !Growth reaches 2*Ldmrg sites. The current finite algorithm adds one site
+    !to each block during a sweep, so also check the target at 2*Ldmrg+2.
+    if(to_lower(DMRGtype)=="f")nchecks=2
+    do check=1,nchecks
+       length=2*Ldmrg+2*(check-1)
+       if(any(abs(target_density)>dble(huge(0))/dble(length)))&
+            error stop "init_dmrg ERROR: final QN density exceeds integer conversion range"
+       requested=dble(int(length*target_density))+target_offset
+       lower=length*target_site_min
+       upper=length*target_site_max
+       outside=any(requested<lower-tol).or.any(requested>upper+tol)
+       off_lattice=.false.
+       if(unit_charge_grid)then
+          !Starting from the smallest total QN, allowed values increase by one.
+          !Thus requested-lower must be an integer. This also checks spin parity.
+          lattice_index=requested-lower
+          off_lattice=any(abs(lattice_index-anint(lattice_index))>tol)
+       endif
+       if(outside.or.off_lattice)then
+          if(MpiMaster)then
+             write(LOGfile,*)"Final QN precheck failed at length:",length
+             write(LOGfile,*)"Requested target:",requested
+             write(LOGfile,*)"Physical lower/upper bounds:",lower,upper
+             write(LOGfile,*)"Density:",target_density," offset:",target_offset
+          endif
+          if(outside)error stop "init_dmrg ERROR: final QN target outside physical bounds"
+          error stop "init_dmrg ERROR: final QN target off charge lattice"
+       endif
+    enddo
+    if(.not.unit_charge_grid.and.MpiMaster)write(LOGfile,*)&
+         "Final QN bounds checked; custom local charge constraints remain checked by SB construction."
+  end subroutine setup_target_qn
+
 
 
   

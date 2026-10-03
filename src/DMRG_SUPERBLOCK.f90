@@ -876,10 +876,21 @@ contains
   subroutine sb_set_current_qn()
     real(8),allocatable :: requested(:),lower(:),upper(:)
     current_L         = left%length + right%length
-    !Preserve truncation toward zero of the density contribution.
-    !Do not truncate the offset: spin charges may be half-integer.
+    !L is the total number of sites in the two enlarged blocks.
+    !Calculate each target as INT(L*rho)+offset.
+    !INT discards the fractional part: INT(2.7)=2 and INT(-2.7)=-2.
+    !For example, 0.33333333*6 is slightly below 2 and gives 1.
+    !Keep the offset as supplied: spin QNs can be half-integer.
     requested = dble(int(target_density*current_L)) + target_offset
     current_target_QN=requested
+    !In the first growth steps, an offset may ask for more particles or spin
+    !than the small chain can contain. Temporarily limit the target to what fits.
+    !Example: rho_up=0.5, offset_up=3.
+    !  L=4: request 5 up electrons, but only 4 fit; use 4.
+    !  L=6: request 6 up electrons; all 6 fit, so use the requested target.
+    !This correction requires the same local QN limits on every site.
+    !At L >= 2*Ldmrg, use the requested target without correcting it.
+    !Its physical validity was already checked in init_dmrg for standard bases.
     if(target_uniform_bounds.and.current_L<2*Ldmrg)then
        lower=current_L*target_site_min
        upper=current_L*target_site_max
@@ -890,8 +901,13 @@ contains
           write(LOGfile,*)"Effective target:",current_target_QN
        endif
     endif
-    !Mixed local charge bounds cannot be reconstructed safely from a block length.
-    !Leave those targets unchanged rather than use truncated block-sector bounds.
+    !A target inside these limits may still be unavailable in the saved blocks.
+    !For example, DMRG truncation may have removed the states needed to build it.
+    !sb_get_states checks that states exist for the target we actually use.
+    !Do not change the target to match the QNs left after truncation:
+    !that would change the physical sector we are calculating.
+    !With different local limits, leave the target unchanged and let the SB
+    !construction check whether it can be built.
   end subroutine sb_set_current_qn
 
 

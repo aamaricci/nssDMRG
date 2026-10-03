@@ -27,7 +27,6 @@ contains
 #endif
     type(site),dimension(:)     :: ModelDot
     integer                     :: ilat,i,f,m
-    real(8),allocatable         :: local_min(:),local_max(:),local_qn(:)
     !
     !
 #ifdef _MPI
@@ -62,33 +61,12 @@ contains
     call validate_model_dq(Hij)
     !
     !SETUP the initial DMRG structure
-    allocate(target_density, source=QN_density)
-    allocate(target_offset, source=QN_offset)
-    !Physical bounds come from untruncated site bases, never retained blocks.
-    allocate(target_site_min(size(target_density)),target_site_max(size(target_density)))
-    target_site_min=huge(1d0);target_site_max=-huge(1d0)
-    target_uniform_bounds=.true.
-    allocate(local_min(size(target_density)),local_max(size(target_density)))
-    do ilat=1,size(dot)
-       local_min=huge(1d0)
-       local_max=-huge(1d0)
-       do i=1,size(dot(ilat)%sectors(1))
-          local_qn=dot(ilat)%sectors(1)%qn(index=i)
-          local_min=min(local_min,local_qn)
-          local_max=max(local_max,local_qn)
-       enddo
-       if(ilat==1)then
-          target_site_min=local_min;target_site_max=local_max
-       else
-          if(any(abs(local_min-target_site_min)>1d-12).or.&
-             any(abs(local_max-target_site_max)>1d-12))target_uniform_bounds=.false.
-       endif
-    enddo
+    call setup_target_qn()
     init_left   = block(dot(1))
     init_right  = block(dot(1))
     !
     call reset_profile()
-    !    
+    !
     init_called =.true.
     !
     left =init_left
@@ -100,7 +78,7 @@ contains
 
 
 
-  
+
   !##################################################################
   !              FINALIZE DMRG ALGORITHM
   !##################################################################
@@ -536,6 +514,8 @@ contains
     character(len=:),allocatable         :: site_type,reference_type
     character(len=:),allocatable         :: pkey,ikey,jkey,refkey
     !
+    !Density and offset must have the same number of entries.
+    !Each operator must also specify a QN change (dq) with that many entries.
     qDim=size(QN_density)
     if(qDim<=0)stop "validate_model_dq ERROR: empty QN_DENSITY"
     if(size(QN_offset)/=qDim)error stop "validate_model_dq ERROR: QN_OFFSET dimension mismatch"

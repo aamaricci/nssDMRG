@@ -25,9 +25,12 @@ MODULE INPUT_VARS
   !Threshold dimension for the Quantum Number truncation   
   integer                      :: QNdim
   !Number of conserved Quantum Numbers to consider:
-  real(8),allocatable          :: QN_density(:),QN_offset(:)
+  real(8),allocatable          :: QN_density(:)
   !Target charges: int(L*QN_density) + QN_offset, in local-basis units.
-  !Density is per site (all orbitals); offset is an extensive charge.
+  !QN_Density is per site (all orbitals for fermions!)
+  real(8),allocatable          :: QN_offset(:)
+  !Target charges: int(L*QN_density) + QN_offset, in local-basis units.
+  !QN_Offset is an extensive charge.
   character(len=7)             :: Dmrg_mode            !
   !Flag to set the DMRG mode: normal[,superc,nonsu2]
   integer                      :: Nsweep
@@ -154,33 +157,6 @@ MODULE INPUT_VARS
 
 contains
 
-  subroutine check_qn_input_records(filename)
-    character(len=*),intent(in) :: filename
-    character(len=2048) :: line
-    character(len=:),allocatable :: key
-    integer :: unit,ios,eq,comment
-    logical :: exists
-    inquire(file=filename,exist=exists)
-    if(.not.exists)return
-    open(newunit=unit,file=filename,status="old",action="read",iostat=ios)
-    if(ios/=0)error stop "read_input ERROR: cannot inspect input file"
-    do
-       read(unit,'(A)',iostat=ios)line
-       if(ios<0)exit
-       if(ios>0)error stop "read_input ERROR: cannot read input file"
-       comment=index(line,"!");if(comment>0)line=line(:comment-1)
-       eq=index(line,"=");if(eq<=1)cycle
-       key=trim(adjustl(to_lower(line(:eq-1))))
-       if(key=="qntype".or.key=="dmrg_qn")then
-          write(*,*)"Obsolete QN input record: ",key
-          write(*,*)"Use QN_DENSITY and QN_OFFSET; see the QN input section in README.md."
-          error stop "read_input ERROR: migrate the old quantum-number input"
-       endif
-    enddo
-    close(unit)
-  end subroutine check_qn_input_records
-
-
 
   !+-------------------------------------------------------------------+
   !PURPOSE  : READ THE INPUT FILE AND SETUP GLOBAL VARIABLES
@@ -271,16 +247,18 @@ contains
          default=1,&
          comment="Total  conserved abelian quantum numbers to consider.")
     if(QNdim<=0)error stop "read_input ERROR: QNdim must be positive"
-    allocate(QN_density(QNdim),QN_offset(QNdim))
+
+    allocate(QN_density(QNdim))
     call parse_input_variable(QN_density,"QN_DENSITY",INPUTunit,&
          default=(/(0d0,i=1,QNdim)/),&
          comment="Reference charge per site (all orbitals), in local-basis units")
+    if(.NOT.all(ieee_is_finite(QN_density))) error stop "read_input ERROR: QN_DENSITY must be finite"
+
+    allocate(QN_offset(QNdim))
     call parse_input_variable(QN_offset,"QN_OFFSET",INPUTunit,&
          default=(/(0d0,i=1,QNdim)/),&
          comment="Length-independent total charge added after truncating L*QN_DENSITY")
-
-    if(.not.all(ieee_is_finite(QN_density)).or..not.all(ieee_is_finite(QN_offset)))&
-         error stop "read_input ERROR: QN_DENSITY and QN_OFFSET must be finite"
+    if(.NOT.all(ieee_is_finite(QN_offset)))error stop "read_input ERROR: QN_OFFSET must be finite"
 
     call parse_input_variable(Norb,"NORB",INPUTunit,&
          default=1,&
@@ -440,6 +418,38 @@ contains
   ! call parse_input_variable(gf_flag,"GF_FLAG",INPUTunit,&default=(/( .false.,i=1,size(gf_flag) )/),comment="Flag to activate Greens functions calculation")
   ! call parse_input_variable(chispin_flag,"CHISPIN_FLAG",INPUTunit,default=(/( .false.,i=1,size(chispin_flag) )/),comment="Flag to activate spin susceptibility calculation.")
   ! !
+
+
+  !This reproduces in part the logic of `parse_input_variable` and
+  ! is used to check for obsolete QN input records.
+  subroutine check_qn_input_records(filename)
+     character(len=*),intent(in) :: filename
+     character(len=2048) :: line
+     character(len=:),allocatable :: key
+     integer :: unit,ios,eq,comment
+     logical :: exists
+     inquire(file=filename,exist=exists)
+     if(.not.exists)return
+     open(newunit=unit,file=filename,status="old",action="read",iostat=ios)
+     if(ios/=0)error stop "read_input ERROR: cannot inspect input file"
+     do
+        read(unit,'(A)',iostat=ios)line
+        if(ios<0)exit
+        if(ios>0)error stop "read_input ERROR: cannot read input file"
+        comment=index(line,"!");if(comment>0)line=line(:comment-1)
+        eq=index(line,"=");if(eq<=1)cycle
+        key=trim(adjustl(to_lower(line(:eq-1))))
+        if(key=="qntype".or.key=="dmrg_qn")then
+           write(*,*)"Obsolete QN input record: ",key
+           write(*,*)"Use QN_DENSITY and QN_OFFSET; see the QN input section in README.md."
+           error stop "read_input ERROR: migrate the old quantum-number input"
+        endif
+     enddo
+     close(unit)
+   end subroutine check_qn_input_records
+
+
+
 
   subroutine substring_delete (s,sub)
     !! S_S_DELETE2 recursively removes a substring from a string.

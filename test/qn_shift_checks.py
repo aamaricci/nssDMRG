@@ -170,12 +170,27 @@ values, _ = run_case("warmup_fermion", config(1, [.5, .5], [3, 0], length=3))
 check(values, free_energy(6, 6, 3), [6, 3])
 assert "Warm-up QN clipping at length:" in (root / "warmup_fermion" / "run.log").read_text()
 message = run_case("impossible_final", config(0, [0], [4], length=3), fail=True)
-assert "requested QN sector is empty" in message
+assert "final QN target outside physical bounds" in message
+assert "Enlarge blocks" not in message
 
 message = run_case("empty", config(1, [.5, .5], [3, 0]), fail=True)
-assert "requested QN sector is empty" in message
+assert "final QN target outside physical bounds" in message
+assert "Enlarge blocks" not in message
 message = run_case("fractional", config(1, [.5, .5], [.5, 0]), fail=True)
-assert "requested QN sector is empty" in message
+assert "final QN target off charge lattice" in message
+assert "Enlarge blocks" not in message
+# Being close to 1/3 is valid, even at a noncommensurate final length.
+values, _ = run_case("third_final", config(1, [1/3, 1/3], [0, 0], length=4))
+assert all(abs(charge-2)<1e-8 for charge in values[1]), values
+# A small positive shift is still impossible at full filling: no fixed cutoff
+# can substitute for physical bounds of the final target.
+message = run_case("full_filling_shift", config(1, [1, .5], [1, 0], length=3), fail=True)
+assert "final QN target outside physical bounds" in message
+assert "Enlarge blocks" not in message
+# Finite sweeps also check their enlarged length before starting.
+message = run_case("finite_final", config(0, [1], [-2], length=2).replace("DMRGTYPE=i", "DMRGTYPE=f"), fail=True)
+assert "Final QN precheck failed at length:" in message
+assert "Enlarge blocks" not in message
 message = run_case("obsolete_input", config(0, [0], [0], legacy=True), fail=True)
 assert "migrate the old quantum-number input" in message
 
