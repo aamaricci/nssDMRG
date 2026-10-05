@@ -26,6 +26,7 @@ The structure of this code is largely inspired by the excellent simple-DMRG proj
   - [Milestone 10](#milestone10) Fix Symmetry Fragmentation using MPI sub-communicators.
   - [Milestone 11](#milestone11) Lazy direct MVP operator filtering.
   - [Milestone 12](#milestone12) Memory management and further optimizations. Fix restart and checkpointing.
+  - [Milestone 13](#milestone13) Structure factors and polarization/topological marker.
 - [Results](#results)
     
 ## <a name="dependencies"></a> Dependencies
@@ -249,6 +250,22 @@ On top of that this version includes a number of optimizations and bug fixes whi
 
 
 
+### <a name="milestone13"></a> Milestone 13
+- [x] Structure factors and polarization/topological marker
+
+`Measure_Structure_DMRG` measures a generic two-operators $A$ and $B$ structure factor $S(q)=\sum_{ij} e^{iq(r_i-r_j)} \langle A_i B_j\rangle$ for a given set of sites, including raw/connected correlations and selected bulk windows.
+
+`Structure_Factor_DMRG` transforms an existing real or complex correlation matrix. 
+
+`Correlation_Distance_DMRG` retains the OBC pair-count weights. 
+
+`Measure_Polarization_DMRG` computes the complex spin-resolved marker z_sigma, from a single OBC or PBC ground state, using a product of local charge exponentials in the physical basis.
+
+`Measure_String_DMRG` and `Measure_Parity_DMRG` measure the spin string and charge parity correlations with selectable endpoints.
+
+
+
+
 ## <a name="results"></a> Results
 Here are some results for the Heisenberg model:  
 
@@ -366,3 +383,94 @@ The software is provided as it is and can be read and copied, in agreement with
 the Terms of Service of GITHUB. 
 
 You should have received a copy of the GNU LGPL along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+### Exact and bulk structure factors
+
+Existing calls to `Measure_Structure_DMRG` keep the default `mode='exact'`.
+For identical Hermitian operators that commute on different sites, declare
+`same_operator=.true., hermitian=.true., commuting=.true.` to measure only
+one triangle, including the diagonal. These flags are caller assertions;
+the code checks operator identity but does not infer the remaining properties.
+The exact result is normalized by the number of selected sites. `Cij` is
+allocated only if requested; otherwise the Fourier sum is accumulated directly.
+
+```fortran
+call Measure_Structure_DMRG(Sz, dq0, Sz, dq0, q, Sq, &
+     positions=bulk_sites, mode='bulk', rmax=30, norigins=2, &
+     same_operator=.true., hermitian=.true., commuting=.true., &
+     connected=.true., Cr=Cr)
+```
+
+`bulk_sites` must be consecutive and ascending. Bulk mode measures central
+pairs for each distance, including zero; it assumes correlations in the
+selection depend mainly on distance. This is an approximation in OBC and
+must be checked against different origins, windows and distances. Merely
+setting symmetry flags does not assert translation invariance.
+
+`rmax` defaults to half the selected window (at most M-1); `norigins` defaults
+to one. Origins are adjacent and centered for each distance; near the maximum
+distance their number is capped at the available pairs. Both parameters refer
+to the selected window. Without all three symmetry flags, positive and negative
+distances are measured separately. `Cr` has bounds `-rmax:rmax`; bulk mode
+rejects `Cij`, because no complete correlation matrix has been measured.
+
+By default bulk mode returns the unweighted truncated sum
+`F(q)=sum_r exp(i*q*r)*Cr(r)`, with no extra division by window size.
+`window_weights=.true.` inserts `1-abs(r)/M` to estimate the finite-window
+pair sum with the same normalization as exact mode. Sampling every available
+origin (`norigins>=M`) and setting `rmax=M-1` with these weights reproduces
+the exact sum, but restores quadratic measurement cost.
+`rmax`, `norigins`, `window_weights`, and `Cr` are bulk-only options.
+A truncated or sampled bulk transform need not be nonnegative, even when the
+exact same-operator structure factor is. PBC Hamiltonians still use physical
+non-wrapping separations here: no periodic distance reduction is inferred.
+
+### Direct structure factors from Aq
+
+`Measure_Structure_Aq_DMRG` computes the same finite-selection structure factor
+as `Measure_Structure_DMRG(...,mode='exact')`, without measuring individual
+pairs or assuming translation symmetry:
+
+```fortran
+call Measure_Structure_Aq_DMRG(Sz, dq0, q, Sq, connected=.true.)
+call Measure_Structure_Aq_DMRG(density, dq0, q, Nq, positions=selected_sites)
+! Or use a registered local operator key:
+call Measure_Structure_Aq_DMRG('observable_key', q, Fq, connected=.true.)
+```
+
+For M selected sites, `Aq=sum_j exp(i*q*j)*A_j` and the result is
+`<Aq^dagger Aq>/M`. `connected=.true.` subtracts `abs(<Aq>)**2/M`.
+Coordinates are physical site numbers, even for irregular selections or PBC.
+There are no distance cutoffs or window weights: all selected pairs are
+included through the collective operator. The result is a complex array
+with zero imaginary part for the supported Hermitian observables.
+
+This version supports parity-even Hermitian local operators that conserve
+all quantum numbers, including total local Sz and density. The matrix API
+checks Hermiticity and the supplied zero QN shift; the caller must give
+correct quantum-number/parity metadata. The key API checks stored metadata
+on every selected site and also permits site-dependent local matrices.
+QN-changing and parity-odd operators are not supported by this interface.
+
+The implementation accumulates C=sum_j cos(q*j)*A_j,
+S=sum_j sin(q*j)*A_j, and T=C*C+S*S on each block. T is built before each
+later truncation and rotated independently from C and S. It is never computed
+by squaring their final projected matrices. Across the superblock cut, the
+second moment is T_left+T_right+2*C_left*C_right+2*S_left*S_right.
+This uses O(N*q_count) block-growth steps at fixed retained dimension,
+where N is the full chain length; matrix multiplication and MPI costs still
+depend on retained dimension and sparsity. Only the current moments are kept.
+Saved rotation histories and the measurement state allow postprocessing
+without running the solver again.
+
+The manual driver `test/manual/structure_aq.f90` and companion
+`test/manual/structure_aq_checks.py` compare this route against complete
+real-space sums for raw and connected spin/density correlations, irregular
+selections, local offsets, truncated runs and checkpoint postprocessing.
+They are intentionally not part of the reference-data CMake regressions.
+Build the driver against the matching library/compiler definitions; run:
+
+```sh
+python3 test/manual/structure_aq_checks.py /path/to/executable /path/to/scratch
+# For a matching MPI build, append /path/to/mpiexec to run with two ranks.
+```
