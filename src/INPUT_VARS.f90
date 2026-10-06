@@ -181,8 +181,7 @@ contains
     endif
 #endif
     !
-    !Reject obsolete records rather than silently selecting the zero-charge defaults.
-    call check_qn_input_records(INPUTunit)
+    
     !Store the name of the input file:
     input_file=str(INPUTunit)
     !
@@ -259,7 +258,7 @@ contains
          default=(/(0d0,i=1,QNdim)/),&
          comment="Length-independent total charge added after truncating L*QN_DENSITY")
     if(.NOT.all(ieee_is_finite(QN_offset)))error stop "read_input ERROR: QN_OFFSET must be finite"
-
+    
     call parse_input_variable(Norb,"NORB",INPUTunit,&
          default=1,&
          comment="Number of impurity orbitals.")
@@ -380,6 +379,16 @@ contains
        call code_version(git_code_version)
     endif
     !
+    !
+    !Raise an error if OLD QN inputs variables are found in the input file because a mismatch here can cause problems.
+    !Reject obsolete records rather than silently selecting the zero-charge defaults.
+    if(check_input_variable("qntype",INPUTunit).OR.&     
+       check_input_variable("dmrg_qn",INPUTunit))then
+      if(Master)write(LOGfile,*)"read_input ERROR: QNtype is obsolete."  
+      if(Master)write(LOGfile,*)" Use QN_DENSITY and QN_OFFSET; see the QN input section in README.md."  
+      error stop      
+    endif
+    !
   end subroutine read_input
 
 
@@ -418,36 +427,6 @@ contains
   ! call parse_input_variable(gf_flag,"GF_FLAG",INPUTunit,&default=(/( .false.,i=1,size(gf_flag) )/),comment="Flag to activate Greens functions calculation")
   ! call parse_input_variable(chispin_flag,"CHISPIN_FLAG",INPUTunit,default=(/( .false.,i=1,size(chispin_flag) )/),comment="Flag to activate spin susceptibility calculation.")
   ! !
-
-
-  !This reproduces in part the logic of `parse_input_variable` and
-  ! is used to check for obsolete QN input records.
-  subroutine check_qn_input_records(filename)
-     character(len=*),intent(in) :: filename
-     character(len=2048) :: line
-     character(len=:),allocatable :: key
-     integer :: unit,ios,eq,comment
-     logical :: exists
-     inquire(file=filename,exist=exists)
-     if(.not.exists)return
-     open(newunit=unit,file=filename,status="old",action="read",iostat=ios)
-     if(ios/=0)error stop "read_input ERROR: cannot inspect input file"
-     do
-        read(unit,'(A)',iostat=ios)line
-        if(ios<0)exit
-        if(ios>0)error stop "read_input ERROR: cannot read input file"
-        comment=index(line,"!");if(comment>0)line=line(:comment-1)
-        eq=index(line,"=");if(eq<=1)cycle
-        key=trim(adjustl(to_lower(line(:eq-1))))
-        if(key=="qntype".or.key=="dmrg_qn")then
-           write(*,*)"Obsolete QN input record: ",key
-           write(*,*)"Use QN_DENSITY and QN_OFFSET; see the QN input section in README.md."
-           error stop "read_input ERROR: migrate the old quantum-number input"
-        endif
-     enddo
-     close(unit)
-   end subroutine check_qn_input_records
-
 
 
 
