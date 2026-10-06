@@ -61,12 +61,12 @@ contains
     call validate_model_dq(Hij)
     !
     !SETUP the initial DMRG structure
-    allocate(target_qn, source=DMRG_QN)
+    call setup_target_qn()
     init_left   = block(dot(1))
     init_right  = block(dot(1))
     !
     call reset_profile()
-    !    
+    !
     init_called =.true.
     !
     left =init_left
@@ -78,7 +78,7 @@ contains
 
 
 
-  
+
   !##################################################################
   !              FINALIZE DMRG ALGORITHM
   !##################################################################
@@ -123,6 +123,11 @@ contains
     call sb_sector%free()
     if(allocated(gs_vector))deallocate(gs_vector)
     if(allocated(sb_states))deallocate(sb_states)
+    if(allocated(target_density))deallocate(target_density)
+    if(allocated(target_offset))deallocate(target_offset)
+    if(allocated(target_site_min))deallocate(target_site_min)
+    if(allocated(target_site_max))deallocate(target_site_max)
+    if(allocated(current_target_QN))deallocate(current_target_QN)
     init_called  = .false.
     !
     call reset_profile()
@@ -394,6 +399,10 @@ contains
             "Enlarged Blocks Dim                  :",m_eleft,m_eright
        write(LOGfile,"(A,"//str(size(current_target_QN))//"F24.15)")&
             "Target_QN                            :",current_target_QN
+       write(LOGfile,"(A,"//str(size(target_density))//"F24.15)")&
+            "QN density per site                  :",target_density
+       write(LOGfile,"(A,"//str(size(target_offset))//"F24.15)")&
+            "QN total offset                      :",target_offset
        write(LOGfile,"(A,I12)")&
             "SuperBlock Length                    :",current_L
        write(LOGfile,"(A,3x,G24.15)")&
@@ -420,15 +429,8 @@ contains
     !
     if(MpiMaster)then
        write(LOGfile,*)"- - - - - - - - - - - - - - - - - - - - -"
-       select case(str(to_lower(QNtype(1:1))))
-       case default;stop "DMRG_MAIN error: QNtype != [local,global]"
-       case("l")
-          write(LOGfile,"(A,"//str(Lanc_Neigen)//"F24.15)")&
-               "Energies/N                           :",gs_energy/sum(current_target_QN)
-       case("g")
-          write(LOGfile,"(A,"//str(Lanc_Neigen)//"F24.15)")&
-               "Energies/L                           :",gs_energy/current_L
-       end select
+       write(LOGfile,"(A,"//str(Lanc_Neigen)//"F24.15)")&
+            "Energies/L                           :",gs_energy/current_L
        write(LOGfile,*)"- - - - - - - - - - - - - - - - - - - - -"
     endif
     !
@@ -512,8 +514,11 @@ contains
     character(len=:),allocatable         :: site_type,reference_type
     character(len=:),allocatable         :: pkey,ikey,jkey,refkey
     !
-    qDim=size(DMRG_QN)
-    if(qDim<=0)stop "validate_model_dq ERROR: empty DMRG_QN"
+    !Density and offset must have the same number of entries.
+    !Each operator must also specify a QN change (dq) with that many entries.
+    qDim=size(QN_density)
+    if(qDim<=0)stop "validate_model_dq ERROR: empty QN_DENSITY"
+    if(size(QN_offset)/=qDim)error stop "validate_model_dq ERROR: QN_OFFSET dimension mismatch"
     Nlinks=1;if(PBCdmrg)Nlinks=2
     reference_type=to_lower(str(dot(1)%type()))
     !
@@ -835,7 +840,7 @@ END MODULE DMRG_MAIN
 !   !    Build SUPER-BLOCK Sector
 !   !#################################
 !   current_L         = left%length + right%length
-!   current_target_QN = int(target_qn*current_L*Norb)
+!   current_target_QN = int(target_density*current_L) + target_offset
 !   write(LOGfile,"(A22,I12)")"SuperBlock Length = ",current_L
 !   write(LOGfile,"(A22,"//str(size(current_target_QN))//"F12.7)")"Target_QN = ",current_target_QN
 !   write(LOGfile,"(A22,G12.7)")"Total         = ",sum(current_target_QN)

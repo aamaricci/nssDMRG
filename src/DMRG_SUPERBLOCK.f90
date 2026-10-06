@@ -227,7 +227,12 @@ contains
     if(total_states==0)then
        if(MpiMaster) call stop_timer("Build SB states")
        t_sb_get_states=t_stop()
-       stop "sb_get_states ERROR: total_states=0. There are no SB states."
+       if(MpiMaster)then
+          write(LOGfile,*)"No retained superblock states for target:",current_target_QN
+          write(LOGfile,*)"Length:",current_L," density:",target_density," offset:",target_offset
+          write(LOGfile,*)"Check charge integrality, physical bounds and retained block sectors."
+       endif
+       error stop "sb_get_states ERROR: requested QN sector is empty"
     else
        if(MpiMaster)write(LOGfile,*)"Total States:",total_states
     endif
@@ -869,14 +874,40 @@ contains
 
 
   subroutine sb_set_current_qn()
+    real(8),allocatable :: requested(:),lower(:),upper(:)
     current_L         = left%length + right%length
-    select case(str(to_lower(QNtype(1:1))))
-    case default;stop "DMRG_MAIN error: QNtype != [local,global]"
-    case("l")
-       current_target_QN = int(target_qn*current_L*Norb)
-    case("g")
-       current_target_QN = min(current_L,int(target_qn*Norb)) !to check
-    end select
+    !L is the total number of sites in the two enlarged blocks.
+    !Calculate each target as INT(L*rho)+offset.
+    !INT discards the fractional part: INT(2.7)=2 and INT(-2.7)=-2.
+    !For example, 0.33333333*6 is slightly below 2 and gives 1.
+    !Keep the offset as supplied: spin QNs can be half-integer.
+    requested = dble(int(target_density*current_L)) + target_offset
+    current_target_QN=requested
+    !In the first growth steps, an offset may ask for more particles or spin
+    !than the small chain can contain. Temporarily limit the target to what fits.
+    !Example: rho_up=0.5, offset_up=3.
+    !  L=4: request 5 up electrons, but only 4 fit; use 4.
+    !  L=6: request 6 up electrons; all 6 fit, so use the requested target.
+    !This correction requires the same local QN limits on every site.
+    !At L >= 2*Ldmrg, use the requested target without correcting it.
+    !Its physical validity was already checked in init_dmrg for standard bases.
+    if(target_uniform_bounds.and.current_L<2*Ldmrg)then
+       lower=current_L*target_site_min
+       upper=current_L*target_site_max
+       current_target_QN=max(lower,min(upper,requested))
+       if(any(current_target_QN/=requested).and.MpiMaster)then
+          write(LOGfile,*)"Warm-up QN clipping at length:",current_L
+          write(LOGfile,*)"Requested target:",requested
+          write(LOGfile,*)"Effective target:",current_target_QN
+       endif
+    endif
+    !A target inside these limits may still be unavailable in the saved blocks.
+    !For example, DMRG truncation may have removed the states needed to build it.
+    !sb_get_states checks that states exist for the target we actually use.
+    !Do not change the target to match the QNs left after truncation:
+    !that would change the physical sector we are calculating.
+    !With different local limits, leave the target unchanged and let the SB
+    !construction check whether it can be built.
   end subroutine sb_set_current_qn
 
 

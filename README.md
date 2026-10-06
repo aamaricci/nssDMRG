@@ -27,6 +27,7 @@ The structure of this code is largely inspired by the excellent simple-DMRG proj
   - [Milestone 11](#milestone11) Lazy direct MVP operator filtering.
   - [Milestone 12](#milestone12) Memory management and further optimizations. Fix restart and checkpointing.
   - [Milestone 13](#milestone13) Structure factors and polarization/topological marker.
+  - [Milestone 14](#milestone14) Change in the QN target definition.
 - [Results](#results)
     
 ## <a name="dependencies"></a> Dependencies
@@ -255,13 +256,137 @@ On top of that this version includes a number of optimizations and bug fixes whi
 
 `Measure_Structure_DMRG` measures a generic two-operators $A$ and $B$ structure factor $S(q)=\sum_{ij} e^{iq(r_i-r_j)} \langle A_i B_j\rangle$ for a given set of sites, including raw/connected correlations and selected bulk windows.
 
-`Structure_Factor_DMRG` transforms an existing real or complex correlation matrix. 
-
-`Correlation_Distance_DMRG` retains the OBC pair-count weights. 
+`Structure_Factor_DMRG` Discrete Fourier Transforms an existing real or complex correlation matrix. 
 
 `Measure_Polarization_DMRG` computes the complex spin-resolved marker z_sigma, from a single OBC or PBC ground state, using a product of local charge exponentials in the physical basis.
 
 `Measure_String_DMRG` and `Measure_Parity_DMRG` measure the spin string and charge parity correlations with selectable endpoints.
+
+
+##### Remarks: 
+Existing calls to `Measure_Structure_DMRG` keep the default `mode='exact'` which analyzes all pairs `i` and `j`.
+
+For identical Hermitian operators $A$ $B=A$, that commute on different sites, declare
+`same_operator=.true., hermitian=.true., commuting=.true.` to measure only
+one triangle, including the diagonal. These flags are caller assertions. 
+The code checks operator identity but does not infer the remaining properties.
+
+The exact result is normalized by the number of selected sites. `C_AB(i,j)` is
+allocated only if requested (optional input). Otherwise the Fourier sum is accumulated directly.
+
+###### Example
+```fortran
+call Measure_Structure_DMRG(Sz, dq0, Sz, dq0, q, Sq, &
+     positions=bulk_sites, mode='bulk', rmax=30, norigins=2, &
+     same_operator=.true., hermitian=.true., commuting=.true., &
+     connected=.true., Cr=Cr)
+```
+
+`bulk_sites` is the list of sites from which pairs `i` and `j` are obtained. 
+It must be consecutive and ascending. Bulk mode measures central
+pairs for each distance, including zero; it assumes correlations in the
+selection depend mainly on distance. This is an approximation in OBC and
+must be checked against different origins, windows and distances. Merely
+setting symmetry flags does not assert translation invariance.
+
+`rmax` defaults to half the selected window (at most M-1); `norigins` defaults
+to one. Origins are adjacent and centered for each distance; near the maximum
+distance their number is capped at the available pairs. Both parameters refer
+to the selected window. Without all three symmetry flags, positive and negative
+distances are measured separately. `Cr` has bounds `-rmax:rmax`; bulk mode
+rejects `Cij`, because no complete correlation matrix has been measured.
+
+By default `mode=bulk` returns the unweighted truncated sum
+`F(q)=sum_r exp(i*q*r)*Cr(r)`, with no extra division by window size.
+`window_weights=.true.` inserts `1-abs(r)/M` to estimate the finite-window
+pair sum with the same normalization as exact mode. Sampling every available
+origin (`norigins>=M`) and setting `rmax=M-1` with these weights reproduces
+the exact sum, but restores quadratic measurement cost.
+`rmax`, `norigins`, `window_weights`, and `Cr` are bulk-only options.
+A truncated or sampled bulk transform need not be nonnegative, even when the
+exact same-operator structure factor is. PBC Hamiltonians still use physical
+non-wrapping separations here: no periodic distance reduction is inferred.
+
+##### Direct structure factors from $A_q$
+
+`Measure_Structure_Aq_DMRG` computes the same finite-selection structure factor
+as `Measure_Structure_DMRG(...,mode='exact')`, without measuring individual
+pairs or assuming translation symmetry:
+
+```fortran
+call Measure_Structure_Aq_DMRG(Sz, dq0, q, Sq, connected=.true.)
+call Measure_Structure_Aq_DMRG(density, dq0, q, Nq, positions=selected_sites)
+! Or use a registered local operator key:
+call Measure_Structure_Aq_DMRG('observable_key', q, Fq, connected=.true.)
+```
+
+For M selected sites, $A_q=\sum_j e^{i q R_j}A_j$  and the result is
+$\langle A_q^dagger A_q\rangle/M$. `connected=.true.` subtracts $|\langle A_q\rangle|^2 /M $.
+
+Coordinates are physical site numbers, even for irregular selections or PBC.
+There are no distance cutoffs or window weights: all selected pairs are
+included through the collective operator. The result is a complex array
+with zero imaginary part for the supported Hermitian observables.
+
+This version supports parity-even Hermitian local operators that conserve
+all quantum numbers, including total local Sz and density. The matrix API
+checks Hermiticity and the supplied zero QN shift; the caller must give
+correct quantum-number/parity metadata. The key API checks stored metadata
+on every selected site and also permits site-dependent local matrices.
+QN-changing and parity-odd operators are not supported by this interface.
+
+The implementation accumulates $C=\sum_j \cos(q*R_j)A_j$, 
+$S=\sum_j \sin(qR_j)A_j$, and $T=C.C+S.S$ on each block. $T$ is built before each
+later truncation and rotated independently from C and S. 
+Saved rotation histories and the measurement state allow postprocessing
+without running the solver again.
+
+
+
+
+### <a name="milestone14"></a> Milestone 14
+- [x] Change in the QN target definition.
+- [x] Input variables `QN_DENSITY` and `QN_OFFSET` replace the old `DMRG_QN` and `QNTYPE` records.
+
+The new input variable `QN_DENSITY` sets the background charge per site and `QN_OFFSET` adds a fixed
+total change: 
+
+`Q = int(L * QN_DENSITY) + QN_OFFSET`. 
+
+Both vectors have `QNDIM` entries and default to zero. **For fermions density includes all orbitals, while offsets are not multiplied by `NORB` or by the local spin**.
+
+Example: for one-orbital fermions, half filling plus one up electron is:
+```text
+QN_DENSITY = 0.5, 0.5
+QN_OFFSET  = 1.0, 0.0
+```
+
+Quarter filling uses density `0.25,0.25` and zero offsets. While for half-filled two-orbital Hubbard or BHZ models:
+
+```text
+QN_DENSITY = 1.0, 1.0
+QN_OFFSET  = 0.0, 0.0
+```
+
+Non-commensurate lengths are accepted, e.g. `rho=1/3` at `L=8` gives two particles. Truncation is unchanged, including numerical effects: `0.33333333 * 6` gives one.
+
+For both spin-1/2 and spin-1 chains, density zero and offset one select total `Sz=1` as reversing a spin-1/2 changes `Sz` by one. An offset of `0.5` is impossible on four spin-1/2 sites, whose total `Sz` is integer. Changing the target selects another sector, not a specific excited wavefunction.
+Fermion `normal` mode uses `(N_up,N_down)`, `nonsu2` their sum, and `superc`
+their difference, equal to `2*Sz`.
+
+There a number of checks on the target. The requested total QN is compared to the local limits, which are set by the number of sites and orbitals. With equal local QN limits, the final target is checked before growth or restart loading. Five up electrons on four one-orbital sites, or `Sz=0.5` on four spin-1/2 sites, fail immediately. During growth only, targets exceeding those limits are temporarily reduced and logged: density `0.5` plus offset `3` uses
+four up electrons at `L=4`, then the requested six at `L=6`. The final target is never corrected. No fixed cutoff on the offset is imposed.
+
+Same site family does not mean same QN limits. Different fields are fine; spin-1/2 and spin-1 both use type `SPIN` and physical `Sz`, but their limits differ. For mixed limits, early final checks and temporary corrections are disabled; superblock construction checks the actual states. Three spin-1/2 sites plus one spin-1 site allow `Sz=0.5` but not `Sz=0`. Small mixed-spin examples agree with exact diagonalization; arbitrary ordering, measurements and mixed-chain restarts remain unvalidated. Spin/fermion mixtures are rejected.
+Custom bases with missing QN combinations also require the superblock check. Truncation can cause a missing sector too: blocks retaining only `Sz=0,1` cannot form total `Sz=-1`; the code reports this rather than changing the target.
+
+The old `QNTYPE` and `DMRG_QN` records are removed. Migrate `local` inputs to density `old_DMRG_QN * NORB` with zero offset, and `global` inputs to zero density
+with the previous effective target as offset. Restart formats are unchanged;
+continuation requires matching the old targets. `mainSep25` keeps the old code.
+
+
+
+
 
 
 
@@ -292,6 +417,14 @@ In the top-left panel we compare the energy per site $E(j)$ with respect to the 
 
 
 ![gif](https://github.com/aamaricci/Lattice_DMRG/blob/main/.plot/DMRG_record.gif)
+
+
+
+
+
+
+
+
 
 
 ## Tests
@@ -384,93 +517,6 @@ the Terms of Service of GITHUB.
 
 You should have received a copy of the GNU LGPL along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-### Exact and bulk structure factors
 
-Existing calls to `Measure_Structure_DMRG` keep the default `mode='exact'`.
-For identical Hermitian operators that commute on different sites, declare
-`same_operator=.true., hermitian=.true., commuting=.true.` to measure only
-one triangle, including the diagonal. These flags are caller assertions;
-the code checks operator identity but does not infer the remaining properties.
-The exact result is normalized by the number of selected sites. `Cij` is
-allocated only if requested; otherwise the Fourier sum is accumulated directly.
 
-```fortran
-call Measure_Structure_DMRG(Sz, dq0, Sz, dq0, q, Sq, &
-     positions=bulk_sites, mode='bulk', rmax=30, norigins=2, &
-     same_operator=.true., hermitian=.true., commuting=.true., &
-     connected=.true., Cr=Cr)
-```
 
-`bulk_sites` must be consecutive and ascending. Bulk mode measures central
-pairs for each distance, including zero; it assumes correlations in the
-selection depend mainly on distance. This is an approximation in OBC and
-must be checked against different origins, windows and distances. Merely
-setting symmetry flags does not assert translation invariance.
-
-`rmax` defaults to half the selected window (at most M-1); `norigins` defaults
-to one. Origins are adjacent and centered for each distance; near the maximum
-distance their number is capped at the available pairs. Both parameters refer
-to the selected window. Without all three symmetry flags, positive and negative
-distances are measured separately. `Cr` has bounds `-rmax:rmax`; bulk mode
-rejects `Cij`, because no complete correlation matrix has been measured.
-
-By default bulk mode returns the unweighted truncated sum
-`F(q)=sum_r exp(i*q*r)*Cr(r)`, with no extra division by window size.
-`window_weights=.true.` inserts `1-abs(r)/M` to estimate the finite-window
-pair sum with the same normalization as exact mode. Sampling every available
-origin (`norigins>=M`) and setting `rmax=M-1` with these weights reproduces
-the exact sum, but restores quadratic measurement cost.
-`rmax`, `norigins`, `window_weights`, and `Cr` are bulk-only options.
-A truncated or sampled bulk transform need not be nonnegative, even when the
-exact same-operator structure factor is. PBC Hamiltonians still use physical
-non-wrapping separations here: no periodic distance reduction is inferred.
-
-### Direct structure factors from Aq
-
-`Measure_Structure_Aq_DMRG` computes the same finite-selection structure factor
-as `Measure_Structure_DMRG(...,mode='exact')`, without measuring individual
-pairs or assuming translation symmetry:
-
-```fortran
-call Measure_Structure_Aq_DMRG(Sz, dq0, q, Sq, connected=.true.)
-call Measure_Structure_Aq_DMRG(density, dq0, q, Nq, positions=selected_sites)
-! Or use a registered local operator key:
-call Measure_Structure_Aq_DMRG('observable_key', q, Fq, connected=.true.)
-```
-
-For M selected sites, `Aq=sum_j exp(i*q*j)*A_j` and the result is
-`<Aq^dagger Aq>/M`. `connected=.true.` subtracts `abs(<Aq>)**2/M`.
-Coordinates are physical site numbers, even for irregular selections or PBC.
-There are no distance cutoffs or window weights: all selected pairs are
-included through the collective operator. The result is a complex array
-with zero imaginary part for the supported Hermitian observables.
-
-This version supports parity-even Hermitian local operators that conserve
-all quantum numbers, including total local Sz and density. The matrix API
-checks Hermiticity and the supplied zero QN shift; the caller must give
-correct quantum-number/parity metadata. The key API checks stored metadata
-on every selected site and also permits site-dependent local matrices.
-QN-changing and parity-odd operators are not supported by this interface.
-
-The implementation accumulates C=sum_j cos(q*j)*A_j,
-S=sum_j sin(q*j)*A_j, and T=C*C+S*S on each block. T is built before each
-later truncation and rotated independently from C and S. It is never computed
-by squaring their final projected matrices. Across the superblock cut, the
-second moment is T_left+T_right+2*C_left*C_right+2*S_left*S_right.
-This uses O(N*q_count) block-growth steps at fixed retained dimension,
-where N is the full chain length; matrix multiplication and MPI costs still
-depend on retained dimension and sparsity. Only the current moments are kept.
-Saved rotation histories and the measurement state allow postprocessing
-without running the solver again.
-
-The manual driver `test/manual/structure_aq.f90` and companion
-`test/manual/structure_aq_checks.py` compare this route against complete
-real-space sums for raw and connected spin/density correlations, irregular
-selections, local offsets, truncated runs and checkpoint postprocessing.
-They are intentionally not part of the reference-data CMake regressions.
-Build the driver against the matching library/compiler definitions; run:
-
-```sh
-python3 test/manual/structure_aq_checks.py /path/to/executable /path/to/scratch
-# For a matching MPI build, append /path/to/mpiexec to run with two ranks.
-```

@@ -61,3 +61,16 @@ ENDFUNCTION()
 
 add_dmrg_test(dmrg_spin_regression dmrg_test_spin Spin1d_SU2)
 add_dmrg_test(dmrg_hubbard_regression dmrg_test_hubbard Hubbard1d)
+
+# Small sectors are compared with independent exact diagonalization by Python.
+ADD_EXECUTABLE(dmrg_test_qn src/qn_shift.f90)
+ADD_DEPENDENCIES(dmrg_test_qn dmrg)
+TARGET_LINK_LIBRARIES(dmrg_test_qn dmrg)
+FIND_PACKAGE(Python3 COMPONENTS Interpreter)
+IF(Python3_Interpreter_FOUND)
+  ADD_TEST(NAME dmrg_qn_shift
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/qn_shift_checks.py
+            $<TARGET_FILE:dmrg_test_qn> ${CMAKE_CURRENT_BINARY_DIR}/qn_checks)
+  SET_TESTS_PROPERTIES(dmrg_qn_shift PROPERTIES TIMEOUT 300
+    ENVIRONMENT "OMP_NUM_THREADS=1" LABELS "dmrg;qn;restart")
+ENDIF()

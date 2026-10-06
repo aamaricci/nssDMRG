@@ -3,6 +3,7 @@ MODULE INPUT_VARS
   USE SF_PARSE_INPUT
   USE SF_IOTOOLS, only:str,set_store_size,to_lower
   USE VERSION
+  USE, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   implicit none
 
   !input variables
@@ -24,10 +25,12 @@ MODULE INPUT_VARS
   !Threshold dimension for the Quantum Number truncation   
   integer                      :: QNdim
   !Number of conserved Quantum Numbers to consider:
-  character(len=12)            :: QNtype
-  !Type of conserved Quantum Numbers, local: q in [0,1], global: Q in [-Ldmrg,Ldmrg] 
-  real(8),allocatable          :: Dmrg_QN(:)
-  !Desired Target Quantum Numbers: size(DMRG_QN)=QNdim
+  real(8),allocatable          :: QN_density(:)
+  !Target charges: int(L*QN_density) + QN_offset, in local-basis units.
+  !QN_Density is per site (all orbitals for fermions!)
+  real(8),allocatable          :: QN_offset(:)
+  !Target charges: int(L*QN_density) + QN_offset, in local-basis units.
+  !QN_Offset is an extensive charge.
   character(len=7)             :: Dmrg_mode            !
   !Flag to set the DMRG mode: normal[,superc,nonsu2]
   integer                      :: Nsweep
@@ -178,6 +181,7 @@ contains
     endif
 #endif
     !
+    
     !Store the name of the input file:
     input_file=str(INPUTunit)
     !
@@ -241,14 +245,20 @@ contains
     call parse_input_variable(QNdim,"QNdim",INPUTunit,&
          default=1,&
          comment="Total  conserved abelian quantum numbers to consider.")
-    allocate(Dmrg_QN(QNdim))    
-    call parse_input_variable(QNtype,"QNtype",INPUTunit,&
-         default="local",&
-         comment="Type of conserved Quantum Numbers, local: q in [0,1], global: Q in [-Ldmrg,Ldmrg]")
-    call parse_input_variable(DMRG_QN,"DMRG_QN",INPUTunit,&
-         default=(/(0d0,i=1,QNdim )/),&
-         comment="Target Sector QN in units specified by QNtype")
+    if(QNdim<=0)error stop "read_input ERROR: QNdim must be positive"
 
+    allocate(QN_density(QNdim))
+    call parse_input_variable(QN_density,"QN_DENSITY",INPUTunit,&
+         default=(/(0d0,i=1,QNdim)/),&
+         comment="Reference charge per site (all orbitals), in local-basis units")
+    if(.NOT.all(ieee_is_finite(QN_density))) error stop "read_input ERROR: QN_DENSITY must be finite"
+
+    allocate(QN_offset(QNdim))
+    call parse_input_variable(QN_offset,"QN_OFFSET",INPUTunit,&
+         default=(/(0d0,i=1,QNdim)/),&
+         comment="Length-independent total charge added after truncating L*QN_DENSITY")
+    if(.NOT.all(ieee_is_finite(QN_offset)))error stop "read_input ERROR: QN_OFFSET must be finite"
+    
     call parse_input_variable(Norb,"NORB",INPUTunit,&
          default=1,&
          comment="Number of impurity orbitals.")
@@ -369,6 +379,16 @@ contains
        call code_version(git_code_version)
     endif
     !
+    !
+    !Raise an error if OLD QN inputs variables are found in the input file because a mismatch here can cause problems.
+    !Reject obsolete records rather than silently selecting the zero-charge defaults.
+    if(check_input_variable("qntype",INPUTunit).OR.&     
+       check_input_variable("dmrg_qn",INPUTunit))then
+      if(Master)write(LOGfile,*)"read_input ERROR: QNtype is obsolete."  
+      if(Master)write(LOGfile,*)" Use QN_DENSITY and QN_OFFSET; see the QN input section in README.md."  
+      error stop      
+    endif
+    !
   end subroutine read_input
 
 
@@ -407,6 +427,8 @@ contains
   ! call parse_input_variable(gf_flag,"GF_FLAG",INPUTunit,&default=(/( .false.,i=1,size(gf_flag) )/),comment="Flag to activate Greens functions calculation")
   ! call parse_input_variable(chispin_flag,"CHISPIN_FLAG",INPUTunit,default=(/( .false.,i=1,size(chispin_flag) )/),comment="Flag to activate spin susceptibility calculation.")
   ! !
+
+
 
   subroutine substring_delete (s,sub)
     !! S_S_DELETE2 recursively removes a substring from a string.
