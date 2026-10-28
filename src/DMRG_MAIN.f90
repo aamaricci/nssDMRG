@@ -83,8 +83,8 @@ contains
   !              FINALIZE DMRG ALGORITHM
   !##################################################################
   subroutine finalize_dmrg()
-    integer :: ilat,command_status,exit_status
-    logical :: restart_exists
+    integer                      :: ilat,command_status,exit_status
+    logical                      :: restart_exists
     character(len=:),allocatable :: restart_dir,restart_archive
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: Finalize DMRG"
@@ -308,7 +308,7 @@ contains
     character(len=1)          :: type
     integer,optional          :: label,sweep
     character(len=1),optional :: link
-    integer                   :: iLabel,unit,i
+    integer                   :: iLabel,unit,i,Ngs
     character(len=1)          :: ilink
     integer                   :: m_sb
     integer                   :: m_rleft,m_rright
@@ -421,6 +421,17 @@ contains
     !#################################
     !In DMRG_SUPERBLOCK:
     call sb_diag()
+    Ngs=get_gs_degeneracy()
+    if(MpiMaster)then
+      if(Ngs==size(gs_energy).AND.size(gs_energy)<size(sb_states))then
+         write(LOGfile,*)"WARNING: all computed eigenstates belong to the ground-state manifold."
+         write(LOGfile,"(A,I12)")
+               "         Computed states (LANC_NEIGEN)  :",size(gs_energy)
+         write(LOGfile,"(A,ES24.15)")&
+               "         GS_DEG_THRESHOLD               :",gs_deg_threshold
+         write(LOGfile,*)"         The degeneracy may be larger: consider increasing LANC_NEIGEN."
+      endif
+    endif
     if(save_measure_state)then
       call sb_save_measure_state()
       if(MpiMaster)call sb_save_measure_blocks()
@@ -431,6 +442,12 @@ contains
        write(LOGfile,*)"- - - - - - - - - - - - - - - - - - - - -"
        write(LOGfile,"(A,"//str(Lanc_Neigen)//"F24.15)")&
             "Energies/L                           :",gs_energy/current_L
+       write(LOGfile,"(A,I12)")&
+            "Ground-state degeneracy              :",Ngs
+       write(LOGfile,"(A,ES24.15)")&
+            "GS degeneracy threshold              :",gs_deg_threshold
+       if(Ngs<size(gs_energy))write(LOGfile,"(A,ES24.15)")&
+            "First non-GS splitting               :",gs_energy(Ngs+1)-gs_energy(1)
        write(LOGfile,*)"- - - - - - - - - - - - - - - - - - - - -"
     endif
     !

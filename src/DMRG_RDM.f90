@@ -16,8 +16,9 @@ contains
   !       GET REDUCED DENSITY MATRIX 
   !##################################################################
   subroutine sb_get_rdm()
-    integer                               :: isb
+    integer                               :: isb,igs,Ngs
     integer                               :: Nleft,Nright,m_sb,Neig
+    real(8)                               :: gs_weight
     real(8),dimension(:),allocatable      :: sb_qn,qn
     integer,dimension(:),allocatable      :: sb_map
 #ifdef _CMPLX
@@ -46,6 +47,8 @@ contains
 #else
     v_state = gs_vector    
 #endif
+    Ngs=get_gs_degeneracy()
+    gs_weight=1d0/dble(Ngs)
     !
     !
     t0=t_start()
@@ -64,11 +67,21 @@ contains
           !LEFT:
           qn  = sb_qn
           rho = build_density_matrix(Nleft,Nright,v_state(:,1),sb_map,'left')
+          rho = gs_weight*rho
+          do igs=2,Ngs
+             rho = rho + gs_weight*build_density_matrix(&
+                  Nleft,Nright,v_state(:,igs),sb_map,'left')
+          enddo
           call rho_left%append(rho,qn=qn,map=left%sectors(1)%map(qn=qn))
           !
           !RIGHT:
           qn  = current_target_qn-sb_qn
           rho = build_density_matrix(Nleft,Nright,v_state(:,1),sb_map,'right') 
+          rho = gs_weight*rho
+          do igs=2,Ngs
+             rho = rho + gs_weight*build_density_matrix(&
+                  Nleft,Nright,v_state(:,igs),sb_map,'right')
+          enddo
           call rho_right%append(rho,qn=qn,map=right%sectors(1)%map(qn=qn))
           !
        enddo

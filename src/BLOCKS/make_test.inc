@@ -64,6 +64,7 @@ define DMRGCONF
  SPARSE_H=F                                    !Sparse H*v: True = allocate sparse; False=direct product using QN decomposition
  LANC_METHOD=arpack                            !select the lanczos method: ARPACK (default), LANCZOS (T=0 only)
  LANC_NEIGEN=1                                 !Number of states per SB sector to be determined.
+ GS_DEG_THRESHOLD=1.000000000E-10              !Absolute energy threshold for ground-state degeneracy.
  LANC_NCV_FACTOR=5                             !Set the size of the Arpack block (Ncv=lanc_ncv_factor*Neigen+lanc_ncv_add)
  LANC_NCV_ADD=0                                !Set the size of the Arpack block (Ncv=lanc_ncv_factor*Neigen+lanc_ncv_add)
  LANC_NITER=512                                !Number of Lanczos iteration in spectrum determination.

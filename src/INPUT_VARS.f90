@@ -69,8 +69,8 @@ MODULE INPUT_VARS
   !flag for HF interaction form U(n-1/2)(n-1/2) VS Unn
   real(8)                      :: cutoff
   !cutoff for spectral summation
-  real(8)                      :: gs_threshold
-  !Energy threshold for ground state degeneracy loop up
+  real(8)                      :: gs_deg_threshold
+  !Absolute energy threshold used to select degenerate ground states
   logical,allocatable          :: gf_flag(:)
   !evaluate Green's functions for Norb+1
   logical,allocatable          :: chispin_flag(:)
@@ -309,6 +309,11 @@ contains
     !      comment="select the lanczos method: ARPACK (default), LANCZOS (T=0 only)")
     call parse_input_variable(lanc_neigen,"LANC_NEIGEN",INPUTunit,default=2,&
          comment="Number of states per SB sector to be determined.")
+    call parse_input_variable(gs_deg_threshold,"GS_DEG_THRESHOLD",INPUTunit,&
+         default=1.d-10,&
+         comment="Absolute energy threshold for ground-state degeneracy.")
+    if(.NOT.ieee_is_finite(gs_deg_threshold).OR.gs_deg_threshold<0d0)&
+         error stop "read_input ERROR: GS_DEG_THRESHOLD must be finite and non-negative"
     call parse_input_variable(lanc_ncv_factor,"LANC_NCV_FACTOR",INPUTunit,default=10,&
          comment="Set the size of the Arpack block (Ncv=lanc_ncv_factor*Neigen+lanc_ncv_add)")
     call parse_input_variable(lanc_ncv_add,"LANC_NCV_ADD",INPUTunit,default=0,&
@@ -413,8 +418,6 @@ contains
 
   ! call parse_input_variable(eps,"EPS",INPUTunit,default=0.01d0,comment="Broadening on the real-axis.")
   ! call parse_input_variable(cutoff,"CUTOFF",INPUTunit,default=1.d-9,comment="Spectrum cut-off, used to determine the number states to be retained.")
-  ! call parse_input_variable(gs_threshold,"GS_THRESHOLD",INPUTunit,default=1.d-9,comment="Energy threshold for ground state degeneracy loop up")
-
   !> Aux parameters (GF)
   ! call parse_input_variable(wini,"WINI",INPUTunit,default=-5.d0,comment="Smallest real-axis frequency")
   ! call parse_input_variable(wfin,"WFIN",INPUTunit,default=5.d0,comment="Largest real-axis frequency")

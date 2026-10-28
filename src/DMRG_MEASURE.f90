@@ -297,7 +297,7 @@ contains
     real(8),allocatable             :: xp(:)
     real(8)                         :: period,theta
     real(8),parameter               :: tol=100d0*epsilon(1d0)
-    integer                         :: i,j,k,N,M,d,p
+    integer                         :: i,j,k,N,M,d,p,igs,Ngs
 #ifdef _CMPLX
     type(sparse_matrix),allocatable :: factors(:)
     real(8),allocatable             :: dqs(:,:)
@@ -356,25 +356,30 @@ contains
     ! complex rather than approximating it by cos of the mean position.
     KL=block_product('l')
     KR=block_product('r')
-    allocate(full(size(sb_states),1));full=0d0
+    Ngs=get_gs_degeneracy()
+    allocate(full(size(sb_states),Ngs));full=0d0
 #ifdef _MPI
     if(MpiStatus)then
-       call gather_vector_MPI(MpiComm,gs_vector(:,1:1),full)
+       call gather_vector_MPI(MpiComm,gs_vector(:,1:Ngs),full)
        call MPI_Bcast(full,size(full),MPI_DOUBLE_PRECISION,0,MpiComm,mpi_error)
     else
-       full=gs_vector(:,1:1)
+       full=gs_vector(:,1:Ngs)
     endif
 #else
-    full=gs_vector(:,1:1)
+    full=gs_vector(:,1:Ngs)
 #endif
     allocate(psi(right%Dim,left%Dim));psi=0d0
-    do i=1,size(sb_states)
-       ir=mod(sb_states(i)-1,right%Dim)+1
-       il=(sb_states(i)-1)/right%Dim+1
-       psi(ir,il)=full(i,1)
+    z=zero
+    do igs=1,Ngs
+       psi=zero
+       do i=1,size(sb_states)
+          ir=mod(sb_states(i)-1,right%Dim)+1
+          il=(sb_states(i)-1)/right%Dim+1
+          psi(ir,il)=full(i,igs)
+       enddo
+       transformed=matmul(matmul(KR,psi),transpose(KL))
+       z=z+sum(conjg(psi)*transformed)/dble(Ngs)
     enddo
-    transformed=matmul(matmul(KR,psi),transpose(KL))
-    z=sum(conjg(psi)*transformed)
     !
   contains
     !
@@ -2589,7 +2594,8 @@ contains
 #endif
     type(sparse_matrix)            :: Al,Br
     real(8),allocatable            :: qrow(:),qcol(:)
-    integer                        :: irow,icol
+    integer                        :: irow,icol,igs,Ngs
+    real(8)                        :: gs_weight
     real(8),parameter              :: dq_tol=100d0*epsilon(1d0)
     !
     if(any(abs(dqLeft+dqRight)>dq_tol))then
@@ -2597,41 +2603,50 @@ contains
        return
     endif
     allocate(Ov(size(gs_vector,1)));Ov=zero
+    Ngs=get_gs_degeneracy()
+    gs_weight=1d0/dble(Ngs)
+    corr=zero
+#ifdef _MPI
+    if(MpiStatus)Otmp=zero
+#endif
     !
-    do irow=1,Nsb
-       qrow=sb_sector%qn(index=irow)
-       qcol=qrow-dqLeft
-       if(.not.sb_sector%has_qn(qcol))cycle
-       icol=sb_sector%index(qn=qcol)
-       !Rows belong to the output sector irow and columns to the input
-       !sector icol. The inverse maps make both blocks rectangular.
-       Al=sp_filter(Oleft,LI(irow)%states,Lmap(icol)%states,&
-            size(LI(icol)%states))
-       Br=sp_filter(Oright,RI(irow)%states,Rmap(icol)%states,&
-            size(RI(icol)%states))
+    do igs=1,Ngs
+       Ov=zero
+       do irow=1,Nsb
+          qrow=sb_sector%qn(index=irow)
+          qcol=qrow-dqLeft
+          if(.not.sb_sector%has_qn(qcol))cycle
+          icol=sb_sector%index(qn=qcol)
+          !Rows belong to the output sector irow and columns to the input
+          !sector icol. The inverse maps make both blocks rectangular.
+          Al=sp_filter(Oleft,LI(irow)%states,Lmap(icol)%states,&
+               size(LI(icol)%states))
+          Br=sp_filter(Oright,RI(irow)%states,Rmap(icol)%states,&
+               size(RI(icol)%states))
+#ifdef _MPI
+          if(MpiStatus)then
+             call Apply_AxB_Measure_MPI(Al,Br,irow,icol,gs_vector(:,igs),Ov)
+          else
+             call Apply_AxB_Measure(Al,Br,Offset(irow),Offset(icol),gs_vector(:,igs),Ov)
+          endif
+#else
+          call Apply_AxB_Measure(Al,Br,Offset(irow),Offset(icol),gs_vector(:,igs),Ov)
+#endif
+          call Al%free()
+          call Br%free()
+       enddo
 #ifdef _MPI
        if(MpiStatus)then
-          call Apply_AxB_Measure_MPI(Al,Br,irow,icol,gs_vector(:,1),Ov)
+          Otmp=Otmp+gs_weight*dot_product(gs_vector(:,igs),Ov)
        else
-          call Apply_AxB_Measure(Al,Br,Offset(irow),Offset(icol),gs_vector(:,1),Ov)
+          corr=corr+gs_weight*dot_product(gs_vector(:,igs),Ov)
        endif
 #else
-       call Apply_AxB_Measure(Al,Br,Offset(irow),Offset(icol),gs_vector(:,1),Ov)
+       corr=corr+gs_weight*dot_product(gs_vector(:,igs),Ov)
 #endif
-       call Al%free()
-       call Br%free()
     enddo
-    !
 #ifdef _MPI
-    if(MpiStatus)then
-       Otmp=dot_product(gs_vector(:,1),Ov)
-       corr=zero
-       call AllReduce_MPI(MpiComm,Otmp,corr)
-    else
-       corr=dot_product(gs_vector(:,1),Ov)
-    endif
-#else
-    corr=dot_product(gs_vector(:,1),Ov)
+    if(MpiStatus)call AllReduce_MPI(MpiComm,Otmp,corr)
 #endif
     deallocate(Ov)
   end function Average_Corr_LR_DMRG
@@ -3103,7 +3118,8 @@ contains
     character(len=1)                 :: label
     real(8)                          :: Oval,Otmp
     type(sparse_matrix)              :: Psi
-    integer                          :: L,R,N
+    integer                          :: L,R,N,igs,Ngs
+    real(8)                          :: gs_weight
     !
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: Average Op"
@@ -3131,16 +3147,28 @@ contains
        end select
     enddo
     !
+    Ngs=get_gs_degeneracy()
+    gs_weight=1d0/dble(Ngs)
+    Oval=zero
 #ifdef _MPI
     if(MpiStatus)then
-       Otmp = dot_product(gs_vector(:,1), OdotV_MPI_direct(Olist,gs_vector(:,1),label))
-       Oval = zero
+       Otmp=zero
+       do igs=1,Ngs
+          Otmp=Otmp+gs_weight*dot_product(gs_vector(:,igs),&
+               OdotV_MPI_direct(Olist,gs_vector(:,igs),label))
+       enddo
        call AllReduce_MPI(MpiComm,Otmp,Oval)
     else
-       Oval = dot_product(gs_vector(:,1), OdotV_direct(Olist,gs_vector(:,1),label))
+       do igs=1,Ngs
+          Oval=Oval+gs_weight*dot_product(gs_vector(:,igs),&
+               OdotV_direct(Olist,gs_vector(:,igs),label))
+       enddo
     endif
 #else
-    Oval = dot_product(gs_vector(:,1), OdotV_direct(Olist,gs_vector(:,1),label))
+    do igs=1,Ngs
+       Oval=Oval+gs_weight*dot_product(gs_vector(:,igs),&
+            OdotV_direct(Olist,gs_vector(:,igs),label))
+    enddo
 #endif
     !
     do isb=1,Nsb

@@ -234,6 +234,24 @@ MODULE DMRG_GLOBAL
 
 contains
 
+
+  !Return the number of computed eigenstates belonging to the ground-state
+  !manifold.  The comparison is always made with the lowest energy, avoiding
+  !a chain of individually small level spacings from enlarging the manifold.
+  function get_gs_degeneracy() result(Ngs)
+    integer :: Ngs
+    if(.not.allocated(gs_energy))&
+         error stop "get_gs_degeneracy ERROR: gs_energy is not allocated"
+    if(size(gs_energy)==0)&
+         error stop "get_gs_degeneracy ERROR: gs_energy is empty"
+    if(gs_deg_threshold<0d0)&
+         error stop "get_gs_degeneracy ERROR: GS_DEG_THRESHOLD must be non-negative"
+    !
+    Ngs=count(abs(gs_energy-gs_energy(1))<=gs_deg_threshold)
+    !
+  end function get_gs_degeneracy
+
+
   !Initialize the target QNs, find the local limits, and check the final target.
   !Call after the sites are ready, before constructing blocks or loading a restart.
   subroutine setup_target_qn()
