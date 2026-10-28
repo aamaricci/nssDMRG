@@ -425,7 +425,7 @@ contains
     if(MpiMaster)then
       if(Ngs==size(gs_energy).AND.size(gs_energy)<size(sb_states))then
          write(LOGfile,*)"WARNING: all computed eigenstates belong to the ground-state manifold."
-         write(LOGfile,"(A,I12)")
+         write(LOGfile,"(A,I12)")&
                "         Computed states (LANC_NEIGEN)  :",size(gs_energy)
          write(LOGfile,"(A,ES24.15)")&
                "         GS_DEG_THRESHOLD               :",gs_deg_threshold
