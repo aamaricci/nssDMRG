@@ -145,6 +145,9 @@ MODULE DMRG_GLOBAL
   real(8)                                        :: t_setup_sb_direct!_SUPERBLOC_SETUP
   real(8)                                        :: t_hxv_sparse     !_SUPERBLOC_SETUP
   real(8)                                        :: t_hxv_direct     !_SUPERBLOC_SETUP
+  !Optional MPI lazy H*v breakdown; transpose time includes synchronization.
+  real(8)                                        :: t_hxv_filter,t_hxv_local,t_hxv_mpi
+  logical                                        :: hxv_detail_active=.false.
   real(8)                                        :: t_hxv_1LxHR      !_SUPERBLOC_SETUP
   real(8)                                        :: t_hxv_HLx1R      !_SUPERBLOC_SETUP
   real(8)                                        :: t_hxv_AxB        !_SUPERBLOC_SETUP
@@ -919,6 +922,10 @@ contains
     t_setup_sb_sparse = 0d0 !_SUPERBLOC_SETUP
     t_setup_sb_direct = 0d0 !_SUPERBLOC_SETUP
     t_hxv_direct      = 0d0 !_SUPERBLOC_SETUP
+    t_hxv_filter      = 0d0
+    t_hxv_local       = 0d0
+    t_hxv_mpi         = 0d0
+    hxv_detail_active = .false.
     t_hxv_1LxHR       = 0d0 !_SUPERBLOC_SETUP
     t_hxv_HLx1R       = 0d0 !_SUPERBLOC_SETUP
     t_hxv_AxB         = 0d0 !_SUPERBLOC_SETUP
@@ -972,6 +979,11 @@ contains
        call Sum_MPI(MpiComm,kb_sb_setup_bcast)
        !
        call Max_MPI(MpiComm,t_hxv_direct)
+       if(hxv_detail_profile.and.direct_H_lazy)then
+          call Max_MPI(MpiComm,t_hxv_filter)
+          call Max_MPI(MpiComm,t_hxv_local)
+          call Max_MPI(MpiComm,t_hxv_mpi)
+       endif
        call Max_MPI(MpiComm,t_hxv_1LxHR)
        call Max_MPI(MpiComm,t_hxv_HLx1R)
        call Max_MPI(MpiComm,t_hxv_AxB)
@@ -1015,6 +1027,11 @@ contains
     call append_profile("kb_sb_setup_bcast",kb_sb_setup_bcast)    
     !
     call append_profile("time_hxv_direct",t_hxv_direct)
+    if(hxv_detail_profile.and.direct_H_lazy.and.MpiStatus)then
+       call append_profile("time_hxv_filter",t_hxv_filter)
+       call append_profile("time_hxv_local",t_hxv_local)
+       call append_profile("time_hxv_mpi",t_hxv_mpi)
+    endif
     call append_profile("time_hxv_1LxHR",t_hxv_1LxHR)
     call append_profile("time_hxv_HLx1R",t_hxv_HLx1R)
     call append_profile("time_hxv_AxB",t_hxv_AxB)

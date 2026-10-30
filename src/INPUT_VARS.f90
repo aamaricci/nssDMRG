@@ -81,6 +81,7 @@ MODULE INPUT_VARS
   !flag to select  storage of sparse matrix H (mem--, cpu++) if TRUE,
   !or direct on-the-fly H*v product (mem++, cpu--
   logical                      :: direct_H_lazy
+  logical                      :: hxv_detail_profile
   !flag to use lazy filtering of direct H*v operator blocks (mem--, cpu++)
   integer                      :: verbose
   !Flag to control verbosity of the library
@@ -303,6 +304,9 @@ contains
     call parse_input_variable(direct_H_lazy,"DIRECT_H_LAZY",INPUTunit,&
          default=.false.,&
          comment="Direct H*v: True = lazily filter QN operator blocks during MVP; False=cache filtered operator blocks")
+    call parse_input_variable(hxv_detail_profile,"HXV_DETAIL_PROFILE",INPUTunit,&
+         default=.false.,&
+         comment="Profile lazy MPI H*v filtering, local contractions and MPI transposes")
     !
     !> Lanczos parameters:
     ! call parse_input_variable(lanc_method,"LANC_METHOD",INPUTunit,default="arpack",&

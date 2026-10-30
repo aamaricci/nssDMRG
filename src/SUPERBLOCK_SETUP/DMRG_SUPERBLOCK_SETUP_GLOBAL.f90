@@ -134,16 +134,20 @@ contains
     type(sparse_matrix),intent(in) :: Op
     integer,intent(in) :: irow,icol
     type(sparse_matrix) :: Op_q
+    if(hxv_detail_active)t0=t_start()
     Op_q=sp_filter(Op,SBleft_states(irow)%states,SBleft_maps(icol)%states,&
          size(SBleft_states(icol)%states))
+    if(hxv_detail_active)t_hxv_filter=t_hxv_filter+t_stop()
   end function filter_left_operator
 
   function filter_right_operator(Op,irow,icol) result(Op_q)
     type(sparse_matrix),intent(in) :: Op
     integer,intent(in) :: irow,icol
     type(sparse_matrix) :: Op_q
+    if(hxv_detail_active)t0=t_start()
     Op_q=sp_filter(Op,SBright_states(irow)%states,SBright_maps(icol)%states,&
          size(SBright_states(icol)%states))
+    if(hxv_detail_active)t_hxv_filter=t_hxv_filter+t_stop()
   end function filter_right_operator
 
 

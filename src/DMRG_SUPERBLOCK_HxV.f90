@@ -572,6 +572,9 @@ contains
     if(.not.MpiStatus)stop "spMatVec_MPI_direct_lazy_main ERROR: MpiStatus = F"
     Hv=zero
     t0=t_start()
+#ifdef _PROFILE
+    hxv_detail_active=hxv_detail_profile
+#endif
     Nso=Nspin*Norb
     !
     !Detect the type of operators
@@ -581,6 +584,7 @@ contains
     sector: do k=1,size(sb_sector)
        !> apply the 1^L x H^r: share L columns
        Hrk = filter_right_operator(Lazy_Hr,k,k)
+       if(hxv_detail_active)t0=t_start()
        do il=1,mpiDls(k)
           do ir=1,Drs(k)
              i = ir + (il-1)*Drs(k) + mpiOffset(k)
@@ -592,6 +596,7 @@ contains
              enddo
           enddo
        enddo
+       if(hxv_detail_active)t_hxv_local=t_hxv_local+t_stop()
        call Hrk%free()
        !
        !> apply the H^L x 1^r: share R rows, requires MPI transpose
@@ -600,7 +605,10 @@ contains
        allocate(Hvt(mpiDrs(k)*Dls(k)));Hvt=zero
        i_start = 1 + mpiOffset(k)
        i_end   = Drs(k)*mpiDls(k)+mpiOffset(k)
+       if(hxv_detail_active)t0=t_start()
        call vector_transpose_MPI(Drs(k),mpiDls(k),v(i_start:i_end),Dls(k),mpiDrs(k),vt,mpiSBCOMM(k))
+       if(hxv_detail_active)t_hxv_mpi=t_hxv_mpi+t_stop()
+       if(hxv_detail_active)t0=t_start()
        do il=1,mpiDrs(k)
           do ir=1,Dls(k)
              i = ir + (il-1)*Dls(k)
@@ -612,8 +620,11 @@ contains
              enddo
           enddo
        enddo
+       if(hxv_detail_active)t_hxv_local=t_hxv_local+t_stop()
        deallocate(vt);allocate(vt(Drs(k)*mpiDls(k)));vt=zero
+       if(hxv_detail_active)t0=t_start()
        call vector_transpose_MPI(Dls(k),mpiDrs(k),Hvt,Drs(k),mpiDls(k),vt,mpiSBCOMM(k))
+       if(hxv_detail_active)t_hxv_mpi=t_hxv_mpi+t_stop()
        Hv(i_start:i_end) = Hv(i_start:i_end) + vt
        deallocate(vt,Hvt)
        call Hlk%free()
@@ -704,6 +715,7 @@ contains
        end select
     enddo sector
     !
+    hxv_detail_active=.false.
     t_hxv_direct=t_hxv_direct + t_stop()
     !
   end subroutine spMatVec_MPI_lazy_main
@@ -799,6 +811,7 @@ contains
     if(is_hconjg==1)shift = mpiOffset(k)
     !
     allocate(C(Bop%Nrow,mpiAcol));C=zero
+    if(hxv_detail_active)t0=t_start()
     do aj=1,mpiAcol
        do bi=1,Bop%Nrow
           if(Bop%row(bi)%Size==0)cycle
@@ -811,6 +824,7 @@ contains
           enddo
        enddo
     enddo
+    if(hxv_detail_active)t_hxv_local=t_hxv_local+t_stop()
     !
     if(mpiNactive(q)>mpiNactive(k))then
        abcomm = mpiSBCOMM(q)
@@ -819,9 +833,12 @@ contains
     endif
     !
     allocate(Ct(Aop%Ncol,mpiBrow));Ct=zero
+    if(hxv_detail_active)t0=t_start()
     call vector_transpose_MPI(Bop%Nrow,mpiAcol,C,Aop%Ncol,mpiBrow,Ct,abcomm)
+    if(hxv_detail_active)t_hxv_mpi=t_hxv_mpi+t_stop()
     allocate(vt(mpiArow*Bop%Nrow));vt=zero
     allocate(Hvt(Aop%Nrow*mpiBrow));Hvt=zero
+    if(hxv_detail_active)t0=t_start()
     do bi=1,mpiBrow
        do ai=1,Aop%Nrow
           if(Aop%row(ai)%Size==0)cycle
@@ -833,9 +850,12 @@ contains
           enddo
        enddo
     enddo
+    if(hxv_detail_active)t_hxv_local=t_hxv_local+t_stop()
     abcomm = mpiSBCOMM(k)
     if(is_hconjg==1)abcomm = mpiSBCOMM(q)
+    if(hxv_detail_active)t0=t_start()
     call vector_transpose_MPI(Aop%Nrow,mpiBrow,Hvt,Bop%Nrow,mpiArow,vt,abcomm)
+    if(hxv_detail_active)t_hxv_mpi=t_hxv_mpi+t_stop()
     !
     i_start = 1 + mpiOffset(k)
     if(is_hconjg==1)i_start = 1 + mpiOffset(q)

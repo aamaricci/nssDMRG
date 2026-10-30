@@ -216,6 +216,8 @@ only at the moment when that contribution is applied to the vector. Thus the mem
 
 <sup>The practical goal of `DIRECT_H_LAZY = T` is therefore to trade repeated sparse filtering work for a substantially smaller persistent memory footprint. This is useful when the calculation is memory-bound rather than CPU-bound, and especially when additional MPI ranks or threads can compensate for the slower MVP while enabling larger retained-state spaces.</sup>
 
+<sup>For MPI builds compiled with profiling, `HXV_DETAIL_PROFILE = T` adds `time_hxv_filter`, `time_hxv_local`, and `time_hxv_mpi` to `full_profile_iDMRG.dmrg` when the lazy direct MVP is used. The last timer covers the entire `vector_transpose_MPI` call, including its setup, MPI collectives, local transpose, and synchronization. Each reported timer is the maximum over ranks; their values need not add up exactly to `time_hxv_direct`. The option defaults to `F` and does not change the Hamiltonian application.</sup>
+
 
 
 ### <a name="milestone12"></a> Milestone 12
