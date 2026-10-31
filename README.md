@@ -218,7 +218,7 @@ only at the moment when that contribution is applied to the vector. Thus the mem
 
 <sup>For MPI builds compiled with profiling, `HXV_DETAIL_PROFILE = T` adds `time_hxv_filter`, `time_hxv_local`, and `time_hxv_mpi` to `full_profile_iDMRG.dmrg` when the lazy direct MVP is used. The last timer covers the entire `vector_transpose_MPI` call, including its setup, MPI collectives, local transpose, and synchronization. Each reported timer is the maximum over ranks; their values need not add up exactly to `time_hxv_direct`. The option defaults to `F` and does not change the Hamiltonian application.</sup>
 
-#### ARPACK tolerance and OBC ground-state prediction
+#### ARPACK tolerance and ground-state prediction
 
 `LANC_TOLERANCE` defaults to `1d-10`. It is an ARPACK relative Ritz
 convergence tolerance; `GS_DEG_THRESHOLD` remains a separate absolute energy
@@ -229,13 +229,13 @@ subsequent DMRG trajectory before relaxing the solver tolerance further.
 `||H*psi_i-E_i*psi_i||` after each solve, at the cost of one extra `H*v` per
 returned state.
 
-`LANC_GS_PREDICTION=T` enables a correlated wavefunction guess for **OBC
-iDMRG with `LANC_NEIGEN=1`**. It is `F` by default. The guess uses the
+`LANC_GS_PREDICTION=T` enables a correlated wavefunction guess for **OBC or
+PBC iDMRG with `LANC_NEIGEN=1`**. It is `F` by default. The guess uses the
 previous superblock wavefunction and the left/right truncation isometries;
 the two partially contracted half states are joined through an SVD
 pseudoinverse of the previous center. The first growth steps use the usual
 ARPACK initialization until this history exists. The implementation rejects
-PBC, finite DMRG, and `LANC_NEIGEN>1` when the option is enabled. A single
+finite DMRG and `LANC_NEIGEN>1` when the option is enabled. A single
 predicted GS vector does not reliably initialize a search for two states:
 in the BHZ OBC tests it gave little benefit at strict tolerance and could
 converge a higher level instead of the first excitation at looser tolerance.
@@ -243,6 +243,12 @@ The small OBC benchmark with one state reduced the eligible-step `H*v`
 count from 150 to 60 at `LANC_TOLERANCE=1d-10`, with energies agreeing within
 `2d-14` per site. `WF_PREDICT_DIAG=T` enables extra trial-state measurements
 for development; it is not required for prediction.
+
+In a BHZ PBC test with `LDMRG=10`, `MDMRG=20`, and four MPI ranks, the
+eligible diagonalizations fell from 50-55 to 30-35 `H*v` products, with
+energies agreeing within `3.2d-14` per site. The contraction forms one local
+site pair at a time to avoid a four-index wavefunction tensor. Peak memory
+and wall-time gain at `MDMRG=500` have not yet been measured.
 
 The current predictor has a direct dense contraction with a work cap and
 can skip a step when that cap is exceeded. It has been tested numerically

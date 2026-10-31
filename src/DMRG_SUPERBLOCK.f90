@@ -355,6 +355,9 @@ contains
     real(8),dimension(:,:),allocatable    :: Hsb,gs_tmp
 #endif
     integer                               :: vecDim,Nloc,m_tmp
+#ifdef _MPI
+    integer                               :: wf_mpierr
+#endif
     logical                               :: exist,lanc_solve,fMpi
     logical                               :: wf_available,wf_can_apply
     real(8)                               :: wf_e,wf_res,wf_weight
@@ -367,6 +370,12 @@ contains
 #endif
     integer                               :: wf_i,wf_j,wf_rank
     real(8)                               :: wf_norm
+    real(8)                               :: wf_filter_weight(3),wf_filter_tau(3)
+#ifdef _CMPLX
+    complex(8),allocatable                :: wf_filter(:)
+#else
+    real(8),allocatable                   :: wf_filter(:)
+#endif
     !
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: SuperBlock diagonalization"
@@ -396,8 +405,15 @@ contains
        wf_available=.false.
        if(MpiMaster)wf_available=allocated(wf_trial)
 #ifdef _MPI
-       if(MpiStatus)call Bcast_MPI(MpiComm,wf_available)
-       if(MpiStatus)call Bcast_MPI(MpiComm,wf_trial_correlated)
+       ! SF_MPI's scalar broadcast has INTENT(IN), so a logical received
+       ! on a non-root rank may be discarded by a compiler temporary.
+       ! Use MPI directly for these two flags before collective scatter.
+       if(MpiStatus)then
+          call MPI_Bcast(wf_available,1,MPI_LOGICAL,0,MpiComm,wf_mpierr)
+          if(wf_mpierr/=MPI_SUCCESS)stop "WF prediction: MPI_Bcast available failed"
+          call MPI_Bcast(wf_trial_correlated,1,MPI_LOGICAL,0,MpiComm,wf_mpierr)
+          if(wf_mpierr/=MPI_SUCCESS)stop "WF prediction: MPI_Bcast correlated failed"
+       endif
 #endif
        wf_can_apply=wf_available
 #ifdef _MPI
@@ -408,7 +424,17 @@ contains
 #endif
        if(wf_can_apply)then
           if(.not.allocated(wf_trial))then
-             allocate(wf_trial(m_sb));wf_trial=zero
+#ifdef _MPI
+             if(MpiStatus.and..not.MpiMaster)then
+                ! MPI_Scatterv reads the full seed only on rank zero.
+                allocate(wf_trial(1))
+             else
+                allocate(wf_trial(m_sb))
+             endif
+#else
+             allocate(wf_trial(m_sb))
+#endif
+             wf_trial=zero
           endif
           allocate(wf_loc(sb_vecDim_Hv()))
 #ifdef _MPI
@@ -442,6 +468,10 @@ contains
 #endif
              wf_e=real(wf_rayleigh,8)
              wf_res=sqrt(sum(abs(wf_hfull-wf_e*wf_trial)**2))
+             if(PBCdmrg)then
+                wf_filter_tau=[0.02d0,0.05d0,0.1d0]
+                allocate(wf_filter(m_sb))
+             endif
           endif
           endif
        endif
@@ -536,6 +566,24 @@ contains
              write(LOGfile,"(A,ES24.15)")"WF trial Rayleigh energy              :",wf_e
              write(LOGfile,"(A,ES24.15)")"WF trial residual norm                :",wf_res
              write(LOGfile,"(A,ES24.15)")"WF trial low-state weight             :",wf_weight
+             if(PBCdmrg)then
+                do wf_j=1,3
+                   wf_filter=wf_trial-wf_filter_tau(wf_j)*(wf_hfull-wf_e*wf_trial)
+                   wf_filter=wf_filter/sqrt(sum(abs(wf_filter)**2))
+                   wf_filter_weight(wf_j)=0d0
+                   do wf_i=1,wf_rank
+#ifdef _CMPLX
+                      wf_overlap=sum(conjg(wf_basis(:,wf_i))*wf_filter)
+#else
+                      wf_overlap=sum(wf_basis(:,wf_i)*wf_filter)
+#endif
+                      wf_filter_weight(wf_j)=wf_filter_weight(wf_j)+abs(wf_overlap)**2
+                   enddo
+                   write(LOGfile,'(A,F7.3,A,ES24.15)') &
+                        "WF filter tau=",wf_filter_tau(wf_j)," low-state weight:",wf_filter_weight(wf_j)
+                enddo
+                deallocate(wf_filter)
+             endif
              deallocate(wf_basis)
           endif
           deallocate(wf_hloc,wf_hfull,wf_gsfull)

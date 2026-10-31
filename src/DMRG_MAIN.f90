@@ -471,7 +471,7 @@ contains
     if(renormalize )then
        call renormalize_block('left',m_rleft)
        call renormalize_block('right',m_rright)
-       call wf_prepare_center()
+       call wf_prepare_center(iLink)
        if(MpiMaster)write(LOGfile,"(A,I12,12X,I12,3X,A3,I6,4X,I6,A1)")&
             "Renormalized Blocks Dim              :",m_rleft,m_rright,"< (",m_left,m_right,")"
        if(MpiMaster)write(LOGfile,"(A,L12,12X,L12)")&

@@ -27,10 +27,11 @@ prediction di McCulloch: non trasporta le correlazioni della coppia locale.
 Per due stati degeneri, il centro del solo primo stato puo' inoltre
 dipendere dalla base scelta dal diagonalizzatore.
 
-La contrazione diretta del centro costa `O(dim(SB)*M_L*M_R)` e viene
-saltata quando la stima supera 50 milioni di termini. Prima di usarla
-su taglie grandi occorre una contrazione per settori. Il parametro
-`WF_PREDICT_DIAG` e' falso per default.
+Il parametro `WF_PREDICT_DIAG` e' falso per default. La contrazione correlata
+proietta i soli coefficienti ammessi del superblocco precedente e forma il
+candidato una coppia di siti alla volta. Non alloca la matrice densa `Psi`
+ne' il tensore predetto a quattro indici. Il costo aritmetico della
+proiezione rimane proporzionale a `dim(SB)*M`; va misurato ai grandi `M`.
 
 ## Segni fermionici
 
@@ -65,10 +66,46 @@ The pseudoinverse uses SVD and a relative cutoff 1e-10. No explicit extra
 fermionic permutation is applied to this same-edge contraction; the
 ordered tensor coefficients are carried by the half states.
 
-`LANC_GS_PREDICTION=T` supplies this candidate to ARPACK only for OBC iDMRG
-with `LANC_NEIGEN=1`. It does not require `WF_PREDICT_DIAG=T`.
+`LANC_GS_PREDICTION=T` supplies this candidate to ARPACK for iDMRG
+with `LANC_NEIGEN=1`, in OBC or PBC. It does not require `WF_PREDICT_DIAG=T`.
 The first two steps retain the usual solver initialization. See
 `test/results/wf_obc/README.md` for the BHZ experiment: excellent overlap
 and fewer products for one eigenstate, but no improvement for two.
-The existing work cap and dense temporary arrays still limit this to
-small experiments. Multi-rank execution has not been validated.
+The OBC experiment predates the streamed implementation. The same projected
+contraction is now used in both boundary conditions.
+
+## PBC single-step filter probe
+
+`WF_PREDICT_DIAG=T` also tests three first-order filtered candidates in PBC,
+`v_tau = normalize(v - tau*(Hv-<H>v))`, for tau=0.02,0.05,0.1. This uses
+the one H*v already computed for the trial-state residual; no filtered
+candidate is passed to ARPACK. The small BHZ PBC test in
+`test/results/pbc_prediction_probe/` has GS weights approximately 0.026
+before filtering and 0.074 at tau=0.1 in both n and p steps. This is too
+weak to serve as the production PBC predictor.
+
+## Correlated PBC prediction
+
+The previous `n`/`p` link determines how `F` and `G` are sliced to recover
+their site indices. The current link determines where each predicted
+amplitude belongs in `sb_states`. These links alternate in PBC and must
+remain distinct. `Cprev^+` uses the same SVD cutoff as OBC. The initial
+step without both isometries keeps ARPACK's usual start vector.
+
+With the BHZ driver, `LDMRG=10` (promoted to 11 for PBC), `MDMRG=20`,
+`LANC_NEIGEN=1`, four MPI ranks, and `WF_PREDICT_DIAG=T`, the eight seeded
+diagonalizations use 30-35 H*v products each; the corresponding unseeded
+steps use 50-55. Energies per site agree within 3.2e-14. The first two
+steps use the normal initialization. The diagnostic adds one H*v per step,
+so its wall times are not the cost of a production run. The candidate's GS
+weight is about 0.97-0.975 in these seeded steps. See
+`test/results/pbc_correlated_probe/` for the reproducible inputs and logs.
+
+At `MDMRG=80` the full run uses 370 H*v products without prediction and 290
+with it. The worst energy/site difference is 1.8e-14. The projected-half
+construction takes about 0.02 CPU seconds per step in this case.
+
+The new memory use is `O(dim(SB)+d*M^2)` for the saved state and projected
+half tensors, plus the existing superblock/eigensolver storage. The pair
+matrix is only `M_L x M_R`. This has been tested through `M=80`; the speed
+and peak memory at `M=500` remain unmeasured.

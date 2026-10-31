@@ -314,7 +314,7 @@ contains
          comment="Diagnose a trial wavefunction; do not pass it to ARPACK")
     !
     call parse_input_variable(lanc_gs_prediction,"LANC_GS_PREDICTION",INPUTunit,default=.false.,&
-         comment="Predict the ground-state seed for OBC iDMRG (LANC_NEIGEN=1)")
+         comment="Predict the ground-state seed for iDMRG (LANC_NEIGEN=1)")
     call parse_input_variable(lanc_check_residual,"LANC_CHECK_RESIDUAL",INPUTunit,default=.false.,&
          comment="Measure absolute Ritz residuals after ARPACK (one extra H*v per state)")
     !> Lanczos parameters:
@@ -323,7 +323,6 @@ contains
     call parse_input_variable(lanc_neigen,"LANC_NEIGEN",INPUTunit,default=2,&
          comment="Number of states per SB sector to be determined.")
     if(lanc_gs_prediction)then
-       if(PBCdmrg)error stop "LANC_GS_PREDICTION requires OBC"
        if(to_lower(DMRGtype)/="i")error stop "LANC_GS_PREDICTION requires iDMRG"
        if(lanc_neigen/=1)error stop "LANC_GS_PREDICTION requires LANC_NEIGEN=1"
     endif
