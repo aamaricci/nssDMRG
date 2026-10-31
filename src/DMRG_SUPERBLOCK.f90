@@ -356,6 +356,17 @@ contains
 #endif
     integer                               :: vecDim,Nloc,m_tmp
     logical                               :: exist,lanc_solve,fMpi
+    logical                               :: wf_available,wf_can_apply
+    real(8)                               :: wf_e,wf_res,wf_weight
+#ifdef _CMPLX
+    complex(8),allocatable                :: wf_loc(:),wf_hloc(:),wf_hfull(:),wf_gsfull(:,:),wf_basis(:,:),wf_seed(:)
+    complex(8)                            :: wf_overlap,wf_rayleigh
+#else
+    real(8),allocatable                   :: wf_loc(:),wf_hloc(:),wf_hfull(:),wf_gsfull(:,:),wf_basis(:,:),wf_seed(:)
+    real(8)                               :: wf_overlap,wf_rayleigh
+#endif
+    integer                               :: wf_i,wf_j,wf_rank
+    real(8)                               :: wf_norm
     !
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: SuperBlock diagonalization"
@@ -382,6 +393,58 @@ contains
     if(lanc_solve)then          !Use (P)-Arpack
        !
        call sb_build_Hv()
+       wf_available=.false.
+       if(MpiMaster)wf_available=allocated(wf_trial)
+#ifdef _MPI
+       if(MpiStatus)call Bcast_MPI(MpiComm,wf_available)
+       if(MpiStatus)call Bcast_MPI(MpiComm,wf_trial_correlated)
+#endif
+       wf_can_apply=wf_available
+#ifdef _MPI
+       if(MpiStatus)then
+          call sb_check_Hv(fMpi)
+          if(fMpi)wf_can_apply=.false.
+       endif
+#endif
+       if(wf_can_apply)then
+          if(.not.allocated(wf_trial))then
+             allocate(wf_trial(m_sb));wf_trial=zero
+          endif
+          allocate(wf_loc(sb_vecDim_Hv()))
+#ifdef _MPI
+          if(MpiStatus)then
+             call scatter_vector_MPI(MpiComm,wf_trial,wf_loc)
+          else
+             wf_loc=wf_trial
+          endif
+#else
+          wf_loc=wf_trial
+#endif
+          if(lanc_gs_prediction.and.wf_trial_correlated)allocate(wf_seed,source=wf_loc)
+          if(wf_predict_diag)then
+             allocate(wf_hloc(size(wf_loc)))
+             call spHtimesV_p(size(wf_loc),wf_loc,wf_hloc)
+             allocate(wf_hfull(m_sb))
+#ifdef _MPI
+          if(MpiStatus)then
+             call gather_vector_MPI(MpiComm,wf_hloc,wf_hfull)
+          else
+             wf_hfull=wf_hloc
+          endif
+#else
+          wf_hfull=wf_hloc
+#endif
+          if(MpiMaster)then
+#ifdef _CMPLX
+             wf_rayleigh=sum(conjg(wf_trial)*wf_hfull)
+#else
+             wf_rayleigh=sum(wf_trial*wf_hfull)
+#endif
+             wf_e=real(wf_rayleigh,8)
+             wf_res=sqrt(sum(abs(wf_hfull-wf_e*wf_trial)**2))
+          endif
+          endif
+       endif
        !
        if(allocated(gs_vector))deallocate(gs_vector)
        vecDim = sb_vecDim_Hv()
@@ -409,25 +472,75 @@ contains
              call sp_eigh(MpiComm,spHtimesV_p,gs_energy,gs_vector,&
                   Nblock,&
                   Nitermax,&
-                  tol=lanc_tolerance,&
+                  tol=lanc_tolerance,v0=wf_seed,&
                   iverbose=(verbose>4),NumOp=NumOp)
           endif
        else
           call sp_eigh(spHtimesV_p,gs_energy,gs_vector,&
                Nblock,&
                Nitermax,&
-               tol=lanc_tolerance,&
+               tol=lanc_tolerance,v0=wf_seed,&
                iverbose=(verbose>4),NumOp=NumOp)
        endif
 #else
        call sp_eigh(spHtimesV_p,gs_energy,gs_vector,&
             Nblock,&
             Nitermax,&
-            tol=lanc_tolerance,&
+            tol=lanc_tolerance,v0=wf_seed,&
             iverbose=(verbose>4),NumOp=NumOp)
 #endif
        if(MpiMaster)call stop_timer("Diag H_sb")
        t_sb_diag=t_stop()
+       if(MpiMaster.and.wf_predict_diag)write(LOGfile,*)"WF benchmark NumOp, seconds, seeded:",NumOp,t_sb_diag,allocated(wf_seed)
+       if(wf_can_apply.and.wf_predict_diag)then
+          allocate(wf_gsfull(m_sb,Neigen))
+#ifdef _MPI
+          if(MpiStatus)then
+             call gather_vector_MPI(MpiComm,gs_vector,wf_gsfull)
+          else
+             wf_gsfull=gs_vector
+          endif
+#else
+          wf_gsfull=gs_vector
+#endif
+          if(MpiMaster)then
+             wf_weight=0d0
+             allocate(wf_basis(m_sb,Neigen));wf_basis=zero
+             wf_rank=0
+             do wf_i=1,Neigen
+                wf_rank=wf_rank+1
+                wf_basis(:,wf_rank)=wf_gsfull(:,wf_i)
+                do wf_j=1,wf_rank-1
+#ifdef _CMPLX
+                   wf_overlap=sum(conjg(wf_basis(:,wf_j))*wf_basis(:,wf_rank))
+#else
+                   wf_overlap=sum(wf_basis(:,wf_j)*wf_basis(:,wf_rank))
+#endif
+                   wf_basis(:,wf_rank)=wf_basis(:,wf_rank)-wf_overlap*wf_basis(:,wf_j)
+                enddo
+                wf_norm=sqrt(sum(abs(wf_basis(:,wf_rank))**2))
+                if(wf_norm>1d-12)then
+                   wf_basis(:,wf_rank)=wf_basis(:,wf_rank)/wf_norm
+                else
+                   wf_rank=wf_rank-1
+                endif
+             enddo
+             do wf_i=1,wf_rank
+#ifdef _CMPLX
+                wf_overlap=sum(conjg(wf_basis(:,wf_i))*wf_trial)
+#else
+                wf_overlap=sum(wf_basis(:,wf_i)*wf_trial)
+#endif
+                wf_weight=wf_weight+abs(wf_overlap)**2
+             enddo
+             write(LOGfile,"(A,ES24.15)")"WF trial Rayleigh energy              :",wf_e
+             write(LOGfile,"(A,ES24.15)")"WF trial residual norm                :",wf_res
+             write(LOGfile,"(A,ES24.15)")"WF trial low-state weight             :",wf_weight
+             deallocate(wf_basis)
+          endif
+          deallocate(wf_hloc,wf_hfull,wf_gsfull)
+       endif
+       if(allocated(wf_loc))deallocate(wf_loc)
        !
     else !use LAPACK
        !
@@ -461,11 +574,42 @@ contains
        deallocate(Hsb,evals)
        !
     endif
+    if(allocated(wf_trial))deallocate(wf_trial)
     !
+    if(lanc_solve.and.lanc_check_residual)call sb_check_ritz_residuals()
     !Free Memory
     call sb_delete_Hv()
     !
   end subroutine sb_diag
+
+  subroutine sb_check_ritz_residuals()
+    integer :: k,nloc
+    logical :: empty_rank
+    real(8) :: local_norm,total_norm
+#ifdef _CMPLX
+    complex(8),allocatable :: hv(:)
+#else
+    real(8),allocatable :: hv(:)
+#endif
+    call sb_check_Hv(empty_rank)
+    if(empty_rank)then
+       if(MpiMaster)write(LOGfile,*)"Ritz residual check skipped: serial fallback"
+       return
+    endif
+    nloc=size(gs_vector,1)
+    allocate(hv(nloc))
+    do k=1,size(gs_vector,2)
+       call spHtimesV_p(nloc,gs_vector(:,k),hv)
+       local_norm=sum(abs(hv-gs_energy(k)*gs_vector(:,k))**2)
+       total_norm=local_norm
+#ifdef _MPI
+       if(MpiStatus)call AllReduce_MPI(MpiComm,local_norm,total_norm)
+#endif
+       if(MpiMaster)write(LOGfile,'(A,I4,2ES24.15)') &
+            "Ritz check: state, energy, residual ",k,gs_energy(k),sqrt(total_norm)
+    enddo
+  end subroutine sb_check_ritz_residuals
+
 
 
 

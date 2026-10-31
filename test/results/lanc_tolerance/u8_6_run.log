@@ -1,0 +1,420 @@
+---------------MPI----------------
+rank:     0 of      1 alive
+----------------------------------
+
+store size =1Kb
+ IRUN=T                                        !Bool to run DMRG. F for post-processing
+ IMEASURE=F                                    !Bool to perform measurements. T for post-processing.
+ IENERGY=F                                     !Bool to get energy measures. T for post-processing.
+ MH=2.000000000                                !
+ LAMBDA=3.000000000E-01                        !
+ DMRGTYPE=i                                    !Set the DMRG algorithm: 'i,I'=Infinite, 'f,F'=Finite. Default i
+ PBCDMRG=F                                     !Set the Periodic(T) or Open(F) boundary conditions. Default F (OBC)
+ LDMRG=6                                       !iDMRG steps to take=max length of the SB.
+ MDMRG=20                                      !Number of states for truncation. If Edmrg>0 use as maximum retained states.
+ EDMRG=0.d0                                    !Threshold energy for truncation. If Mdmrg>0 use Mdmrg as maximum retained states.
+ NSWEEP=1                                      !Number of DMRG sweep to take for finite DMRG algorithm (min 1).
+ MSWEEP=1                                      !!list of states for each sweep in a finite DMRG algorithm.
+ ESWEEP=0.d0                                   !!list of error threshold for each sweep in a finite DMRG algorithm.
+ DMRG_MODE=normal                              !Flag to set DMRG type: normal=normal, superc=superconductive, nonsu2=broken SU(2)
+ QNTRUNCATION_ERROR=0.d0                       !Threshold error on the the symmetry sector RDM truncation: W_k=sum_{i\in QN(k) w_i < QNtruncation_error are excluded
+ QNTRUNCATION_DIM=1                            !Threshold dimension on the symmetry sector RDM truncation: dim(QN(k)<QNtruncation_dim are excluded.
+ QNDIM=2                                       !Total  conserved abelian quantum numbers to consider.
+ QN_DENSITY=1.000000000,1.000000000            !Reference charge per site (all orbitals), in local-basis units
+ QN_OFFSET=0.d0,0.d0                           !Length-independent total charge added after truncating L*QN_DENSITY
+ NORB=2                                        !Number of impurity orbitals.
+ ULOC=8.000000000,8.000000000                  !Values of the local interaction per orbital
+ UST=4.000000000                               !Value of the inter-orbital interaction term
+ JH=2.000000000                                !Hunds coupling
+ JX=0.d0                                       !S-E coupling, Jxy Heisenberg
+ JP=0.d0                                       !P-H coupling, Jz  Heisenberg
+ HFMODE=T                                      !Flag to set the Hartree form of the interaction (n-1/2).
+ DEG_EVALS_THRESHOLD=1.000000000E-01           !threshold for degenerate eigenvalues of rho
+ VERBOSE=1                                     !Verbosity level: 0=almost nothing --> 5:all. Really: all
+ SPARSE_H=F                                    !Sparse H*v: True = allocate sparse; False=direct product using QN decomposition
+ DIRECT_H_LAZY=T                               !Direct H*v: True = lazily filter QN operator blocks during MVP; False=cache filtered operator blocks
+ HXV_DETAIL_PROFILE=F                          !Profile lazy MPI H*v filtering, local contractions and MPI transposes
+ WF_PREDICT_DIAG=F                             !Diagnose a trial wavefunction; do not pass it to ARPACK
+ WF_PREDICT_SEED=F                             !Experimental correlated OBC ARPACK seed
+ LANC_CHECK_RESIDUAL=T                         !Measure absolute Ritz residuals after ARPACK (one extra H*v per state)
+ LANC_NEIGEN=2                                 !Number of states per SB sector to be determined.
+ GS_DEG_THRESHOLD=1.000000000E-10              !Absolute energy threshold for ground-state degeneracy.
+ LANC_NCV_FACTOR=10                            !Set the size of the Arpack block (Ncv=lanc_ncv_factor*Neigen+lanc_ncv_add)
+ LANC_NCV_ADD=0                                !Set the size of the Arpack block (Ncv=lanc_ncv_factor*Neigen+lanc_ncv_add)
+ LANC_NITER=1024                               !Number of Lanczos iteration in spectrum determination.
+ LANC_TOLERANCE=1.000000000E-06                !Tolerance for the Lanczos iterations as used in Arpack and plain lanczos.
+ LANC_DIM_THRESHOLD=128                        !Dimension threshold for Lapack use.
+ SAVE_BLOCK=F                                  !Logical flag to trigger block storage. DEBUG enforces T. Default: T
+ SAVE_ALL_BLOCKS=F                             !Logical flag to save all blocks (T) or just the last (F). DEBUG enforces T. Default: F
+ BLOCK_UMAT_CACHE=F                            !Logical flag to keep all rotation matrices in the block memory. Default=F to save memory.
+ SAVE_UMAT=F                                   !Logical flag to save rotation matrices to file. Default=T
+ SAVE_MEASURE_STATE=F                          !Logical flag to save SuperBlock state for post-processing measures. Default=T
+ BLOCK_FILE=block                              !Name prefix of the stored block file, used to restart DMRG.
+ UMAT_FILE=umat                                !Name suffix of the stored rotation matrices, used to measure in DMRG.
+ LAMBDAQ_FILE=lambdaQ                          !Name of the prefix of the stored symmetry resolved RDMs eigenvalues file.
+ MEASURE_FILE=measure                          !Name prefix of the stored SuperBlock measurement state.
+ LOGFILE=6                                     !LOG unit.
+SCIFOR VERSION (GIT): 44647072754486985df283902ff92a623c808d29
+Timestamp: +31 October 2026   8:34:26.995
+
+code VERSION (GIT): 814857c2c741a1467080802d63bd6aa1262e7546
+Timestamp: +31 October 2026   8:34:26.995
+
+Init Local Fock space:
+# of levels           =               2
+Hilbert dim per spin  =               4              4
+Fock space dimension  =              16
+Number of sectors     =               9
+--------------------------------------------
+|00>|00>
+|10>|00>
+|01>|00>
+|11>|00>
+|00>|10>
+|10>|10>
+|01>|10>
+|11>|10>
+|00>|01>
+|10>|01>
+|01>|01>
+|11>|01>
+|00>|11>
+|10>|11>
+|01>|11>
+|11>|11>
+Using Hloc, shape=[  4,  4]
+( 2.00, 0.00) ( 0.00, 0.00) ( 0.00, 0.00) ( 0.00, 0.00)
+( 0.00, 0.00) (-2.00,-0.00) ( 0.00, 0.00) ( 0.00, 0.00)
+( 0.00, 0.00) ( 0.00, 0.00) ( 2.00, 0.00) ( 0.00, 0.00)
+( 0.00, 0.00) ( 0.00, 0.00) ( 0.00, 0.00) (-2.00,-0.00)
+
+
+
+
+left; right=   2   2  |     [1;92m=[0m[1;92m*[0m[1m|[0m[1;91m*[0m[1;91m=[0m     |
+ Enlarge blocks L
+ Build&Put H*   2.7039999999999842E-003
+ Build&Put O*   3.9599999999995195E-004
+ Build basis   7.3600000000001442E-004
+CPU time (wall time): 000:00:00.508   (000:00:00.508) : Enlarge blocks
+ Enlarge blocks R
+ Build&Put H*   2.5870000000000060E-003
+ Build&Put O*   3.5400000000002096E-004
+ Build basis   6.8000000000001393E-004
+CPU time (wall time): 000:00:00.957   (000:00:00.957) : Enlarge blocks
+ Build SB states
+ Total States:        4900
+ ql:5/25 N(ql):16
+ ql:6/25 N(ql):24
+ ql:8/25 N(ql):24
+ ql:9/25 N(ql):36
+ ql:11/25 N(ql):16
+ ql:12/25 N(ql):24
+ ql:17/25 N(ql):16
+ ql:18/25 N(ql):24
+ ql:19/25 N(ql):16
+CPU time (wall time): 000:00:00.614   (000:00:00.610) : Build SB states
+         Blocks Length               :           1                       1
+Enlarged Blocks Length               :           2                       2
+Enlarged Blocks Dim                  :         256                     256
+Target_QN                            :       4.000000000000000       4.000000000000000
+QN density per site                  :       1.000000000000000       1.000000000000000
+QN total offset                      :       0.000000000000000       0.000000000000000
+SuperBlock Length                    :           4
+Total                                :       8.00000000000000
+Total/L                              :       2.00000000000000
+Total/L/Norb                         :       1.00000000000000
+SuperBlock Dimension  (tot)          :        4900 (       65536)   7.47681%
+ Setup SB Direct, Nsb: 25
+ Get Filtered States:   1.9900000000000473E-004
+ Load Setup Operators:   1.1950999999999989E-002
+CPU time (wall time): 000:00:00.783   (000:00:00.785) : Setup SB Direct
+ Diag H_sb
+CPU time (wall time): 000:00:00.718   (000:00:00.714) : Diag H_sb
+ WF benchmark NumOp, seconds, seeded:         128  0.35741899999999999      F
+Ritz check: state, energy, residual    1  -4.833555053577294E+01   8.992525379216458E-06
+Ritz check: state, energy, residual    2  -4.833548200410023E+01   3.009041384335937E-05
+ - - - - - - - - - - - - - - - - - - - - -
+Energies/L                           :     -12.083887633943235     -12.083870501025057
+Ground-state degeneracy              :           1
+GS degeneracy threshold              :   1.000000000000000E-10
+First non-GS splitting               :   6.853167271003713E-05
+ - - - - - - - - - - - - - - - - - - - - -
+ Get \rho
+CPU time (wall time): 000:00:00.794   (000:00:00.811) : Get \rho
+ Diag rho LEFT
+CPU time (wall time): 000:00:00.624   (000:00:00.625) : Diag rho LEFT
+ Diag rho RIGHT
+CPU time (wall time): 000:00:00.523   (000:00:00.523) : Diag rho RIGHT
+ Renormalize left
+CPU time (wall time): 000:00:00.753   (000:00:00.754) : Renormalize left
+ Renormalize right
+CPU time (wall time): 000:00:00.712   (000:00:00.712) : Renormalize right
+Renormalized Blocks Dim              :          20                      20   < (    16        16)
+Truncating                           :           F                       F
+Truncation Errors                    :   1.347543831853315E-05   1.347543831742293E-05
+CPU time (wall time): 000:00:00.787   (000:00:00.784) : dmrg_step
+
+
+
+left; right=   3   3  |    [1;92m=[0m[1;92m=[0m[1;92m*[0m[1m|[0m[1;91m*[0m[1;91m=[0m[1;91m=[0m    |
+ Enlarge blocks L
+ Build&Put H*   3.5260000000000291E-003
+ Build&Put O*   4.4600000000005746E-004
+ Build basis   1.0179999999999634E-003
+CPU time (wall time): 000:00:00.655   (000:00:00.656) : Enlarge blocks
+ Enlarge blocks R
+ Build&Put H*   3.3579999999999721E-003
+ Build&Put O*   4.7300000000005671E-004
+ Build basis   1.0149999999999881E-003
+CPU time (wall time): 000:00:00.636   (000:00:00.637) : Enlarge blocks
+ Build SB states
+ Total States:        5984
+ ql:2/33 N(ql):24
+ ql:3/33 N(ql):27
+ ql:4/33 N(ql):24
+ ql:5/33 N(ql):32
+ ql:6/33 N(ql):24
+ ql:7/33 N(ql):27
+ ql:8/33 N(ql):24
+ ql:12/33 N(ql):12
+ ql:13/33 N(ql):12
+ ql:16/33 N(ql):12
+ ql:21/33 N(ql):12
+CPU time (wall time): 000:00:00.700   (000:00:00.704) : Build SB states
+         Blocks Length               :           2                       2
+Enlarged Blocks Length               :           3                       3
+Enlarged Blocks Dim                  :         320                     320
+Target_QN                            :       6.000000000000000       6.000000000000000
+QN density per site                  :       1.000000000000000       1.000000000000000
+QN total offset                      :       0.000000000000000       0.000000000000000
+SuperBlock Length                    :           6
+Total                                :       12.0000000000000
+Total/L                              :       2.00000000000000
+Total/L/Norb                         :       1.00000000000000
+SuperBlock Dimension  (tot)          :        5984 (      102400)   5.84375%
+ Setup SB Direct, Nsb: 33
+ Get Filtered States:   1.5200000000004099E-004
+ Load Setup Operators:   1.8505999999999911E-002
+CPU time (wall time): 000:00:00.599   (000:00:00.600) : Setup SB Direct
+ Diag H_sb
+CPU time (wall time): 000:00:00.676   (000:00:00.671) : Diag H_sb
+ WF benchmark NumOp, seconds, seeded:         179  0.67148400000000008      F
+Ritz check: state, energy, residual    1  -7.255885117257932E+01   1.788250572647175E-05
+Ritz check: state, energy, residual    2  -7.255884946138048E+01   7.720912481798768E-06
+ - - - - - - - - - - - - - - - - - - - - -
+Energies/L                           :     -12.093141862096553     -12.093141576896747
+Ground-state degeneracy              :           1
+GS degeneracy threshold              :   1.000000000000000E-10
+First non-GS splitting               :   1.711198848397544E-06
+ - - - - - - - - - - - - - - - - - - - - -
+ Get \rho
+CPU time (wall time): 000:00:00.800   (000:00:00.798) : Get \rho
+ Diag rho LEFT
+CPU time (wall time): 000:00:00.795   (000:00:00.815) : Diag rho LEFT
+ Diag rho RIGHT
+CPU time (wall time): 000:00:00.611   (000:00:00.611) : Diag rho RIGHT
+ Renormalize left
+CPU time (wall time): 000:00:00.962   (000:00:00.962) : Renormalize left
+ Renormalize right
+CPU time (wall time): 000:00:00.904   (000:00:00.911) : Renormalize right
+Renormalized Blocks Dim              :          20                      20   < (    20        20)
+Truncating                           :           T                       T
+Truncation Errors                    :   1.349668618588762E-05   1.349668618566557E-05
+CPU time (wall time): 000:00:00.723   (000:00:00.718) : dmrg_step
+
+
+
+left; right=   4   4  |   [1;92m=[0m[1;92m=[0m[1;92m=[0m[1;92m*[0m[1m|[0m[1;91m*[0m[1;91m=[0m[1;91m=[0m[1;91m=[0m   |
+ Enlarge blocks L
+ Build&Put H*   4.1759999999999575E-003
+ Build&Put O*   4.7900000000011822E-004
+ Build basis   1.2289999999999246E-003
+CPU time (wall time): 000:00:00.760   (000:00:00.773) : Enlarge blocks
+ Enlarge blocks R
+ Build&Put H*   3.6009999999999653E-003
+ Build&Put O*   8.7900000000007417E-004
+ Build basis   1.2350000000000971E-003
+CPU time (wall time): 000:00:00.712   (000:00:00.751) : Enlarge blocks
+ Build SB states
+ Total States:        8776
+ ql:2/23 N(ql):32
+ ql:3/23 N(ql):52
+ ql:5/23 N(ql):24
+ ql:6/23 N(ql):32
+ ql:13/23 N(ql):32
+ ql:14/23 N(ql):24
+ ql:16/23 N(ql):32
+ ql:19/23 N(ql):16
+ ql:20/23 N(ql):16
+CPU time (wall time): 000:00:00.708   (000:00:00.712) : Build SB states
+         Blocks Length               :           3                       3
+Enlarged Blocks Length               :           4                       4
+Enlarged Blocks Dim                  :         320                     320
+Target_QN                            :       8.000000000000000       8.000000000000000
+QN density per site                  :       1.000000000000000       1.000000000000000
+QN total offset                      :       0.000000000000000       0.000000000000000
+SuperBlock Length                    :           8
+Total                                :       16.0000000000000
+Total/L                              :       2.00000000000000
+Total/L/Norb                         :       1.00000000000000
+SuperBlock Dimension  (tot)          :        8776 (      102400)   8.57031%
+ Setup SB Direct, Nsb: 23
+ Get Filtered States:   1.9100000000005224E-004
+ Load Setup Operators:   1.9139999999999935E-002
+CPU time (wall time): 000:00:00.622   (000:00:00.625) : Setup SB Direct
+ Diag H_sb
+CPU time (wall time): 000:00:00.921   (000:00:00.905) : Diag H_sb
+ WF benchmark NumOp, seconds, seeded:         109  0.45284600000000008      F
+Ritz check: state, energy, residual    1  -9.678218425422654E+01   6.156199393131497E-07
+Ritz check: state, energy, residual    2  -9.667063750949956E+01   3.293469209865216E-05
+ - - - - - - - - - - - - - - - - - - - - -
+Energies/L                           :     -12.097773031778317     -12.083829688687445
+Ground-state degeneracy              :           1
+GS degeneracy threshold              :   1.000000000000000E-10
+First non-GS splitting               :   1.115467447269793E-01
+ - - - - - - - - - - - - - - - - - - - - -
+ Get \rho
+CPU time (wall time): 000:00:00.925   (000:00:00.925) : Get \rho
+ Diag rho LEFT
+CPU time (wall time): 000:00:00.917   (000:00:00.916) : Diag rho LEFT
+ Diag rho RIGHT
+CPU time (wall time): 000:00:00.871   (000:00:00.870) : Diag rho RIGHT
+ Renormalize left
+CPU time (wall time): 000:00:00.996   (000:00:00.501) : Renormalize left
+ Renormalize right
+CPU time (wall time): 000:00:00.906   (000:00:00.907) : Renormalize right
+Renormalized Blocks Dim              :          20                      20   < (    20        20)
+Truncating                           :           T                       T
+Truncation Errors                    :   1.086108355152771E-05   1.086108355208282E-05
+CPU time (wall time): 000:00:00.511   (000:00:00.503) : dmrg_step
+
+
+
+left; right=   5   5  |  [1;92m=[0m[1;92m=[0m[1;92m=[0m[1;92m=[0m[1;92m*[0m[1m|[0m[1;91m*[0m[1;91m=[0m[1;91m=[0m[1;91m=[0m[1;91m=[0m  |
+ Enlarge blocks L
+ Build&Put H*   3.4870000000002399E-003
+ Build&Put O*   4.4399999999988893E-004
+ Build basis   9.7900000000006315E-004
+CPU time (wall time): 000:00:00.645   (000:00:00.645) : Enlarge blocks
+ Enlarge blocks R
+ Build&Put H*   3.5369999999996793E-003
+ Build&Put O*   4.8799999999982191E-004
+ Build basis   9.7399999999980835E-004
+CPU time (wall time): 000:00:00.648   (000:00:00.657) : Enlarge blocks
+ Build SB states
+ Total States:        5554
+ ql:1/37 N(ql):11
+ ql:2/37 N(ql):26
+ ql:3/37 N(ql):29
+ ql:4/37 N(ql):20
+ ql:5/37 N(ql):30
+ ql:6/37 N(ql):26
+ ql:7/37 N(ql):19
+ ql:8/37 N(ql):20
+ ql:9/37 N(ql):11
+ ql:11/37 N(ql):12
+ ql:12/37 N(ql):14
+ ql:13/37 N(ql):14
+ ql:14/37 N(ql):12
+CPU time (wall time): 000:00:00.774   (000:00:00.774) : Build SB states
+         Blocks Length               :           4                       4
+Enlarged Blocks Length               :           5                       5
+Enlarged Blocks Dim                  :         320                     320
+Target_QN                            :      10.000000000000000      10.000000000000000
+QN density per site                  :       1.000000000000000       1.000000000000000
+QN total offset                      :       0.000000000000000       0.000000000000000
+SuperBlock Length                    :          10
+Total                                :       20.0000000000000
+Total/L                              :       2.00000000000000
+Total/L/Norb                         :       1.00000000000000
+SuperBlock Dimension  (tot)          :        5554 (      102400)   5.42383%
+ Setup SB Direct, Nsb: 37
+ Get Filtered States:   1.6399999999983095E-004
+ Load Setup Operators:   1.8107999999999791E-002
+CPU time (wall time): 000:00:00.587   (000:00:00.588) : Setup SB Direct
+ Diag H_sb
+CPU time (wall time): 000:00:00.630   (000:00:00.626) : Diag H_sb
+ WF benchmark NumOp, seconds, seeded:         164  0.62659999999999982      F
+Ritz check: state, energy, residual    1  -1.210058524076025E+02   5.041025626436768E-05
+Ritz check: state, energy, residual    2  -1.210050713031601E+02   5.141560836497537E-05
+ - - - - - - - - - - - - - - - - - - - - -
+Energies/L                           :     -12.100585240760250     -12.100507130316005
+Ground-state degeneracy              :           1
+GS degeneracy threshold              :   1.000000000000000E-10
+First non-GS splitting               :   7.811044424528291E-04
+ - - - - - - - - - - - - - - - - - - - - -
+ Get \rho
+CPU time (wall time): 000:00:00.962   (000:00:00.964) : Get \rho
+ Diag rho LEFT
+CPU time (wall time): 000:00:00.766   (000:00:00.762) : Diag rho LEFT
+ Diag rho RIGHT
+CPU time (wall time): 000:00:00.682   (000:00:00.690) : Diag rho RIGHT
+ Renormalize left
+CPU time (wall time): 000:00:00.971   (000:00:00.971) : Renormalize left
+ Renormalize right
+CPU time (wall time): 000:00:00.926   (000:00:00.926) : Renormalize right
+Renormalized Blocks Dim              :          20                      20   < (    20        20)
+Truncating                           :           T                       T
+Truncation Errors                    :   1.619940059871539E-08   1.619940026564848E-08
+CPU time (wall time): 000:00:00.677   (000:00:00.673) : dmrg_step
+
+
+
+left; right=   6   6  | [1;92m=[0m[1;92m=[0m[1;92m=[0m[1;92m=[0m[1;92m=[0m[1;92m*[0m[1m|[0m[1;91m*[0m[1;91m=[0m[1;91m=[0m[1;91m=[0m[1;91m=[0m[1;91m=[0m |
+ Enlarge blocks L
+ Build&Put H*   3.6779999999998481E-003
+ Build&Put O*   4.6000000000034902E-004
+ Build basis   1.1079999999998869E-003
+CPU time (wall time): 000:00:00.689   (000:00:00.690) : Enlarge blocks
+ Enlarge blocks R
+ Build&Put H*   3.5639999999999006E-003
+ Build&Put O*   4.6100000000004471E-004
+ Build basis   1.0220000000003004E-003
+CPU time (wall time): 000:00:00.663   (000:00:00.663) : Enlarge blocks
+ Build SB states
+ Total States:        6756
+ ql:4/31 N(ql):30
+ ql:5/31 N(ql):24
+ ql:7/31 N(ql):40
+ ql:8/31 N(ql):30
+ ql:11/31 N(ql):18
+ ql:12/31 N(ql):25
+ ql:13/31 N(ql):25
+ ql:14/31 N(ql):18
+ ql:16/31 N(ql):16
+CPU time (wall time): 000:00:00.701   (000:00:00.700) : Build SB states
+         Blocks Length               :           5                       5
+Enlarged Blocks Length               :           6                       6
+Enlarged Blocks Dim                  :         320                     320
+Target_QN                            :      12.000000000000000      12.000000000000000
+QN density per site                  :       1.000000000000000       1.000000000000000
+QN total offset                      :       0.000000000000000       0.000000000000000
+SuperBlock Length                    :          12
+Total                                :       24.0000000000000
+Total/L                              :       2.00000000000000
+Total/L/Norb                         :       1.00000000000000
+SuperBlock Dimension  (tot)          :        6756 (      102400)   6.59766%
+ Setup SB Direct, Nsb: 31
+ Get Filtered States:   1.6700000000025028E-004
+ Load Setup Operators:   1.8288000000000082E-002
+CPU time (wall time): 000:00:00.591   (000:00:00.593) : Setup SB Direct
+ Diag H_sb
+CPU time (wall time): 000:00:01.784   (000:00:01.776) : Diag H_sb
+ WF benchmark NumOp, seconds, seeded:         396   1.5528300000000002      F
+Ritz check: state, energy, residual    1  -1.452296073191845E+02   4.725730568406248E-13
+Ritz check: state, energy, residual    2  -1.450076265179525E+02   1.349139369256278E-04
+ - - - - - - - - - - - - - - - - - - - - -
+Energies/L                           :     -12.102467276598704     -12.083968876496044
+Ground-state degeneracy              :           1
+GS degeneracy threshold              :   1.000000000000000E-10
+First non-GS splitting               :   2.219808012319220E-01
+ - - - - - - - - - - - - - - - - - - - - -
+ Get \rho
+CPU time (wall time): 000:00:00.924   (000:00:00.925) : Get \rho
+ Diag rho LEFT
+CPU time (wall time): 000:00:00.763   (000:00:00.761) : Diag rho LEFT
+ Diag rho RIGHT
+CPU time (wall time): 000:00:00.738   (000:00:00.739) : Diag rho RIGHT
+CPU time (wall time): 000:00:01.804   (000:00:01.796) : dmrg_step
+ finalize_dmrg: archived restart in restart_311026_083426.tgz

@@ -79,6 +79,13 @@ MODULE DMRG_GLOBAL
   real(8),dimension(:,:),allocatable             :: gs_vector
 #endif
   real(8),dimension(:),allocatable               :: gs_energy
+  logical :: wf_trial_correlated=.false.
+  ! Trial state in the current superblock sector. Root owns the full vector.
+#ifdef _CMPLX
+  complex(8),dimension(:),allocatable             :: wf_trial
+#else
+  real(8),dimension(:),allocatable                :: wf_trial
+#endif
   real(8),dimension(:),allocatable               :: rho_left_evals
   real(8),dimension(:),allocatable               :: rho_right_evals
   type(blocks_matrix)                            :: psi_left

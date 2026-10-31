@@ -39,6 +39,7 @@ contains
     if(MpiMaster)write(LOGfile,*)"DEBUG: init DMRG"
 #endif
     !
+    call wf_reset()
     !SETUP the Hopping Hamiltonian term:
     call assert_shape(Hij,[Nspin*Norb,Nspin*Norb],"Init_DMRG","Hij")
     allocate(HopH, source=Hij)
@@ -383,6 +384,7 @@ contains
     !In DMRG_SUPERBLOCK:
     call sb_get_states()
     call sb_get_shares()
+    call wf_build_trial(iLink)
     m_sb = size(sb_states)
     rdcd_sb_dim=m_sb
     full_sb_dim=m_eleft*m_eright
@@ -469,6 +471,7 @@ contains
     if(renormalize )then
        call renormalize_block('left',m_rleft)
        call renormalize_block('right',m_rright)
+       call wf_prepare_center()
        if(MpiMaster)write(LOGfile,"(A,I12,12X,I12,3X,A3,I6,4X,I6,A1)")&
             "Renormalized Blocks Dim              :",m_rleft,m_rright,"< (",m_left,m_right,")"
        if(MpiMaster)write(LOGfile,"(A,L12,12X,L12)")&
