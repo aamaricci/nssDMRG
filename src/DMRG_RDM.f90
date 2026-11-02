@@ -10,9 +10,11 @@ MODULE DMRG_RDM
   public :: wf_build_trial, wf_prepare_center, wf_reset
 
 #ifdef _CMPLX
-  complex(8),allocatable :: wf_old_psi(:),wf_ul(:,:),wf_ur(:,:),wf_center(:,:),wf_f(:,:),wf_g(:,:),wf_ci(:,:)
+  complex(8),allocatable :: wf_old_psi(:,:),wf_ul(:,:),wf_ur(:,:),wf_center(:,:,:), &
+       wf_f(:,:,:),wf_g(:,:,:),wf_ci(:,:,:)
 #else
-  real(8),allocatable :: wf_old_psi(:),wf_ul(:,:),wf_ur(:,:),wf_center(:,:),wf_f(:,:),wf_g(:,:),wf_ci(:,:)
+  real(8),allocatable    :: wf_old_psi(:,:),wf_ul(:,:),wf_ur(:,:),wf_center(:,:,:), &
+       wf_f(:,:,:),wf_g(:,:,:),wf_ci(:,:,:)
 #endif
   integer,allocatable :: wf_old_states(:)
   real(8),allocatable :: wf_old_target(:)
@@ -36,6 +38,7 @@ contains
     if(allocated(wf_qn_r))deallocate(wf_qn_r)
     if(allocated(wf_trial))deallocate(wf_trial)
     wf_trial_correlated=.false.
+    wf_trial_nvalid=0
     wf_pair_link=' '
   end subroutine wf_reset
 
@@ -46,7 +49,7 @@ contains
   !##################################################################
   subroutine sb_get_rdm()
     integer                               :: isb,igs,Ngs
-    integer                               :: Nleft,Nright,m_sb,Neig
+    integer                               :: Nleft,Nright,m_sb,Neig,Npredict
     real(8)                               :: gs_weight
     real(8),dimension(:),allocatable      :: sb_qn,qn
     integer,dimension(:),allocatable      :: sb_map
@@ -77,11 +80,14 @@ contains
     v_state = gs_vector    
 #endif
     Ngs=get_gs_degeneracy()
-    if((wf_predict_diag.or.lanc_gs_prediction).and.MpiMaster)then
+    Npredict=0
+    if(lanc_target_prediction)Npredict=Neig
+    if(Npredict>0.and.MpiMaster)then
        if(allocated(wf_old_psi))deallocate(wf_old_psi)
        if(allocated(wf_old_states))deallocate(wf_old_states)
        if(allocated(wf_old_target))deallocate(wf_old_target)
-       allocate(wf_old_psi,source=v_state(:,1))
+       allocate(wf_old_psi(m_sb,Npredict))
+       wf_old_psi=v_state(:,1:Npredict)
        allocate(wf_old_states,source=sb_states)
        allocate(wf_old_target,source=current_target_qn)
        wf_old_nr=right%dim
@@ -280,7 +286,7 @@ contains
           !>truncation-rotation matrices:
           truncation_error_left  = 1d0 - sum(rho_left_evals(1:m_s))
           trRho_left             = rho_left%sparse(m_left,m_s)
-          if((wf_predict_diag.or.lanc_gs_prediction).and.allocated(wf_old_psi))then
+          if(lanc_target_prediction.and.allocated(wf_old_psi))then
              if(allocated(wf_ul))deallocate(wf_ul)
              wf_ul=trRho_left%as_matrix()
           endif
@@ -359,7 +365,7 @@ contains
           !>truncation-rotation matrices:
           truncation_error_right = 1d0 - sum(rho_right_evals(1:m_e))
           trRho_right            = rho_right%sparse(m_right,m_e)
-          if((wf_predict_diag.or.lanc_gs_prediction).and.allocated(wf_old_psi))then
+          if(lanc_target_prediction.and.allocated(wf_old_psi))then
              if(allocated(wf_ur))deallocate(wf_ur)
              wf_ur=trRho_right%as_matrix()
           endif
@@ -416,57 +422,54 @@ contains
   subroutine wf_prepare_center(link)
     character(len=1),intent(in)       :: link
     type(tbasis)                      :: basis_l,basis_r
-    integer                           :: k,i,j,a
-    real(8)                           :: wf_tbegin,wf_tend
+    integer                           :: k,i,j,a,istate,nstate
 #ifdef _CMPLX
-    complex(8),allocatable            :: fcenter(:,:)
+    complex(8),allocatable            :: fcenter(:,:,:)
 #else
-    real(8),allocatable               :: fcenter(:,:)
+    real(8),allocatable               :: fcenter(:,:,:)
 #endif
-    ! This history is assembled on the master from the gathered GS vector.
-    ! Other ranks receive only the final trial vector before ARPACK starts.
-    if((.not.wf_predict_diag.and..not.lanc_gs_prediction).or..not.MpiMaster)return
+    ! Assemble the target-state history on the master from gathered vectors.
+    if(.not.lanc_target_prediction.or..not.MpiMaster)return
     if(.not.allocated(wf_old_psi))return
     if(.not.allocated(wf_ul).or..not.allocated(wf_ur))return
-    ! Build the next correlated pair and update the retained center.
-    call cpu_time(wf_tbegin)
+    nstate=size(wf_old_psi,2)
     call wf_predict_correlated(link)
-    call cpu_time(wf_tend)
-    if(wf_predict_diag)write(LOGfile,*)"WF correlated construction CPU seconds:",wf_tend-wf_tbegin
     if(allocated(wf_center))deallocate(wf_center)
-    allocate(wf_center(size(wf_ul,2),size(wf_ur,2)))
-    ! The retained center is Cnew = U_L^dagger Psi U_R^*. Reuse
-    ! F = U_L^dagger Psi from the correlated contraction when available.
-    ! Before both isometries exist, form F from the allowed SB amplitudes.
-    ! This replaces O(dim(SB)*M_L*M_R) scalar work with matrix products.
+    allocate(wf_center(size(wf_ul,2),size(wf_ur,2),nstate))
+    ! Cnew = U_L^dagger Psi U_R^*. F from the correlated contraction is
+    ! reused; on the bootstrap step construct F from sparse SB amplitudes.
     if(.not.allocated(wf_f))then
-       allocate(fcenter(size(wf_ul,2),size(wf_ur,1)))
+       allocate(fcenter(size(wf_ul,2),size(wf_ur,1),nstate))
        fcenter=zero
        do k=1,size(wf_old_states)
           i=(wf_old_states(k)-1)/wf_old_nr+1
           j=mod(wf_old_states(k)-1,wf_old_nr)+1
-          do a=1,size(wf_center,1)
+          do istate=1,nstate
+             do a=1,size(wf_center,1)
 #ifdef _CMPLX
-             fcenter(a,j)=fcenter(a,j)+conjg(wf_ul(i,a))*wf_old_psi(k)
+                fcenter(a,j,istate)=fcenter(a,j,istate)+conjg(wf_ul(i,a))*wf_old_psi(k,istate)
 #else
-             fcenter(a,j)=fcenter(a,j)+wf_ul(i,a)*wf_old_psi(k)
+                fcenter(a,j,istate)=fcenter(a,j,istate)+wf_ul(i,a)*wf_old_psi(k,istate)
 #endif
+             enddo
           enddo
        enddo
     endif
+    do istate=1,nstate
 #ifdef _CMPLX
-    if(allocated(wf_f))then
-       wf_center=matmul(wf_f,conjg(wf_ur))
-    else
-       wf_center=matmul(fcenter,conjg(wf_ur))
-    endif
+       if(allocated(wf_f))then
+          wf_center(:,:,istate)=matmul(wf_f(:,:,istate),conjg(wf_ur))
+       else
+          wf_center(:,:,istate)=matmul(fcenter(:,:,istate),conjg(wf_ur))
+       endif
 #else
-    if(allocated(wf_f))then
-       wf_center=matmul(wf_f,wf_ur)
-    else
-       wf_center=matmul(fcenter,wf_ur)
-    endif
+       if(allocated(wf_f))then
+          wf_center(:,:,istate)=matmul(wf_f(:,:,istate),wf_ur)
+       else
+          wf_center(:,:,istate)=matmul(fcenter(:,:,istate),wf_ur)
+       endif
 #endif
+    enddo
     deallocate(wf_old_psi,wf_old_states,wf_ul,wf_ur)
     call left%get_basis(basis_l)
     call right%get_basis(basis_r)
@@ -494,7 +497,7 @@ contains
   ! relative cutoff, avoiding inversion of discarded Schmidt directions.
   subroutine wf_predict_correlated(link)
     character(len=1),intent(in)       :: link
-    integer                           :: ml,mr,dl,dr,nl,nr,k,i,j,a,b
+    integer                           :: ml,mr,dl,dr,nl,nr,k,i,j,a,b,istate
     real(8),allocatable               :: singular(:)
 #ifdef _CMPLX
     complex(8),allocatable            :: u(:,:),vh(:,:)
@@ -504,76 +507,89 @@ contains
     if(allocated(wf_f))deallocate(wf_f)
     if(allocated(wf_g))deallocate(wf_g)
     if(allocated(wf_ci))deallocate(wf_ci)
-    ! No correlated continuation is possible until the previous center
-    ! and both previous truncation isometries have been saved.
     if(.not.allocated(wf_center))return
     wf_pair_link=link
     ml=size(wf_center,1)
     mr=size(wf_center,2)
     dl=size(wf_ul,1)/ml
     dr=size(wf_ur,1)/mr
-    if(dl/=dr) return
+    if(dl/=dr)return
     nl=size(wf_ul,2)
     nr=size(wf_ur,2)
-    ! Project only the nonzero superblock amplitudes. A dense Psi or
-    ! four-index predicted tensor costs O(d^2 M^2) memory in PBC.
-    allocate(wf_f(nl,size(wf_ur,1)),wf_g(size(wf_ul,1),nr))
+    ! Stream sparse old amplitudes into one F/G pair per target state.
+    allocate(wf_f(nl,size(wf_ur,1),size(wf_old_psi,2)))
+    allocate(wf_g(size(wf_ul,1),nr,size(wf_old_psi,2)))
     wf_f=zero
     wf_g=zero
     do k=1,size(wf_old_states)
        i=(wf_old_states(k)-1)/wf_old_nr+1
        j=mod(wf_old_states(k)-1,wf_old_nr)+1
-       do a=1,nl
+       do istate=1,size(wf_old_psi,2)
+          do a=1,nl
 #ifdef _CMPLX
-          wf_f(a,j)=wf_f(a,j)+conjg(wf_ul(i,a))*wf_old_psi(k)
+             wf_f(a,j,istate)=wf_f(a,j,istate)+conjg(wf_ul(i,a))*wf_old_psi(k,istate)
 #else
-          wf_f(a,j)=wf_f(a,j)+wf_ul(i,a)*wf_old_psi(k)
+             wf_f(a,j,istate)=wf_f(a,j,istate)+wf_ul(i,a)*wf_old_psi(k,istate)
 #endif
-       enddo
-       do b=1,nr
+          enddo
+          do b=1,nr
 #ifdef _CMPLX
-          wf_g(i,b)=wf_g(i,b)+wf_old_psi(k)*conjg(wf_ur(j,b))
+             wf_g(i,b,istate)=wf_g(i,b,istate)+wf_old_psi(k,istate)*conjg(wf_ur(j,b))
 #else
-          wf_g(i,b)=wf_g(i,b)+wf_old_psi(k)*wf_ur(j,b)
+             wf_g(i,b,istate)=wf_g(i,b,istate)+wf_old_psi(k,istate)*wf_ur(j,b)
 #endif
+          enddo
        enddo
     enddo
-    allocate(u(ml,ml),vh(mr,mr),singular(min(ml,mr)),wf_ci(mr,ml))
-    call svd(wf_center,singular,u,vh)
-    wf_ci=zero
-    do k=1,size(singular)
-       if(singular(k)<=1d-10*maxval(singular))cycle
-       do i=1,mr
-          do j=1,ml
+    allocate(u(ml,ml),vh(mr,mr),singular(min(ml,mr)))
+    allocate(wf_ci(mr,ml,size(wf_old_psi,2)))
+    do istate=1,size(wf_old_psi,2)
+       call svd(wf_center(:,:,istate),singular,u,vh)
+       wf_ci(:,:,istate)=zero
+       do k=1,size(singular)
+          if(singular(k)<=1d-10*maxval(singular))cycle
+          do i=1,mr
+             do j=1,ml
 #ifdef _CMPLX
-             wf_ci(i,j)=wf_ci(i,j)+conjg(vh(k,i))*conjg(u(j,k))/singular(k)
+                wf_ci(i,j,istate)=wf_ci(i,j,istate)+conjg(vh(k,i))*conjg(u(j,k))/singular(k)
 #else
-             wf_ci(i,j)=wf_ci(i,j)+vh(k,i)*u(j,k)/singular(k)
+                wf_ci(i,j,istate)=wf_ci(i,j,istate)+vh(k,i)*u(j,k)/singular(k)
 #endif
+             enddo
           enddo
        enddo
     enddo
   end subroutine wf_predict_correlated
 
+  ! Build one predicted superblock vector per stored target state. The link
+  ! selects n/p tensor ordering; output columns are orthonormal and the first
+  ! wf_trial_nvalid columns are independent guesses suitable for PRIMME.
   subroutine wf_build_trial(link)
     character(len=1),intent(in)       :: link
     type(tbasis)                      :: basis_l,basis_r,site_l,site_r
-    integer                           :: dL,dR,mL,mR,k,il,ir,sl,sr,xl,xr
+    integer                           :: dL,dR,mL,mR,k,il,ir,sl,sr,xl,xr,istate,nstate,nvalid
     integer                           :: pL,pR,pSL,pSR,phase,npair
     real(8),allocatable               :: ql(:),qr(:),qsl(:),qsr(:),delta(:)
     real(8)                           :: norm
+#ifdef _CMPLX
+    complex(8),allocatable            :: candidate(:),overlap
+#else
+    real(8),allocatable               :: candidate(:),overlap
+#endif
     ! Map the predicted pair into the current superblock basis. For PBC,
     ! link is the new ordering; wf_pair_link below remains the old ordering
     ! used to build F and G in the preceding step.
     wf_trial_correlated=.false.
+    wf_trial_nvalid=0
     if(allocated(wf_trial))deallocate(wf_trial)
-    if((.not.wf_predict_diag.and..not.lanc_gs_prediction).or..not.MpiMaster)return
+    if(.not.lanc_target_prediction.or..not.MpiMaster)return
     ! Until a previous target state and truncation isometries are available,
     ! leave the initial guess to the eigensolver.
     if(.not.allocated(wf_center))return
     if(.not.allocated(wf_qn_l).or..not.allocated(wf_qn_r))return
     mL=size(wf_center,1)
     mR=size(wf_center,2)
+    nstate=size(wf_center,3)
     dL=dot(left%length)%dim
     dR=dot(left%length+2)%dim
     if(dL/=dR.or.left%dim/=mL*dL.or.right%dim/=mR*dR)return
@@ -582,7 +598,7 @@ contains
     call dot(left%length)%get_basis(site_l)
     call dot(left%length+2)%get_basis(site_r)
     allocate(delta,source=current_target_qn-wf_old_target)
-    allocate(wf_trial(size(sb_states)))
+    allocate(wf_trial(size(sb_states),nstate))
     wf_trial=zero
     npair=0
     do sl=1,dL
@@ -648,17 +664,33 @@ contains
           case('p') ! L,R,sL,sR -> sL,L,R,sR
              phase=1-2*mod(pSL*(pL+pR),2)
           end select
-          wf_trial(k)=phase*wf_center(il,ir)/sqrt(dble(npair))
+          do istate=1,nstate
+             wf_trial(k,istate)=phase*wf_center(il,ir,istate)/sqrt(dble(npair))
+          enddo
        enddo
     endif
-    norm=sqrt(sum(abs(wf_trial)**2))
-    if(norm>1d-14)then
-       if(wf_predict_diag)write(LOGfile,"(A,A1,A,I0,A,ES14.6)") &
-            "WF trial link=",link," local pairs=",npair," raw norm=",norm
-       wf_trial=wf_trial/norm
-    else
-       deallocate(wf_trial)
-    endif
+    ! PRIMME accepts a block of guesses. Orthonormalize target columns here
+    ! and remove dependent vectors; this does not impose a symmetry or mix
+    ! states beyond the basis rotation needed for a valid starting subspace.
+    allocate(candidate(size(sb_states)))
+    nvalid=0
+    do istate=1,nstate
+       candidate=wf_trial(:,istate)
+       do k=1,nvalid
+#ifdef _CMPLX
+          overlap=sum(conjg(wf_trial(:,k))*candidate)
+#else
+          overlap=sum(wf_trial(:,k)*candidate)
+#endif
+          candidate=candidate-overlap*wf_trial(:,k)
+       enddo
+       norm=sqrt(sum(abs(candidate)**2))
+       if(norm<=1d-12)cycle
+       nvalid=nvalid+1
+       wf_trial(:,nvalid)=candidate/norm
+    enddo
+    wf_trial_nvalid=nvalid
+    if(nvalid==0)deallocate(wf_trial)
     call basis_l%free()
     call basis_r%free()
     call site_l%free()
@@ -679,7 +711,7 @@ contains
     type(tbasis),intent(inout)        :: site_l,site_r
     integer,allocatable               :: head(:,:),next(:)
     integer                           :: k,xl,xr,il,ir,sl,sr,a,b
-    integer                           :: nl,nr,oldml,oldmr,nused
+    integer                           :: nl,nr,oldml,oldmr,istate
     real(8),allocatable               :: qsl(:),qsr(:)
 #ifdef _CMPLX
     complex(8),allocatable            :: fv(:,:),gv(:,:),tmp(:,:),pair(:,:)
@@ -711,31 +743,30 @@ contains
        head(sl,sr)=k
     enddo
     allocate(fv(nl,oldmr),gv(oldml,nr),tmp(nl,oldml),pair(nl,nr))
-    nused=0
-    do sl=1,dl
+    do istate=1,size(wf_f,3)
+      do sl=1,dl
        do sr=1,dr
           if(head(sl,sr)==0)cycle
           qsl=site_l%qn(sl)
           qsr=site_r%qn(sr)
           if(any(abs(qsl+qsr-delta)>1d-8))cycle
-          nused=nused+1
           do b=1,oldmr
              ! The projected tensors use the previous link; the target
              ! superblock indices above use this step's link.
              select case(wf_pair_link)
              case('n')
-                fv(:,b)=wf_f(:,b+(sl-1)*oldmr)
+                fv(:,b)=wf_f(:,b+(sl-1)*oldmr,istate)
              case('p')
-                fv(:,b)=wf_f(:,sl+(b-1)*dr)
+                fv(:,b)=wf_f(:,sl+(b-1)*dr,istate)
              end select
           enddo
-          tmp=matmul(fv,wf_ci)
+          tmp=matmul(fv,wf_ci(:,:,istate))
           do a=1,oldml
              select case(wf_pair_link)
              case('n')
-                gv(a,:)=wf_g(sr+(a-1)*dl,:)
+                gv(a,:)=wf_g(sr+(a-1)*dl,:,istate)
              case('p')
-                gv(a,:)=wf_g(a+(sr-1)*oldml,:)
+                gv(a,:)=wf_g(a+(sr-1)*oldml,:,istate)
              end select
           enddo
           pair=matmul(tmp,gv)
@@ -751,13 +782,13 @@ contains
                 il=mod(xl-1,ml)+1
                 ir=(xr-1)/dr+1
              end select
-             wf_trial(k)=pair(il,ir)
+             wf_trial(k,istate)=pair(il,ir)
              k=next(k)
           enddo
           wf_trial_correlated=.true.
        enddo
+      enddo
     enddo
-    if(wf_predict_diag)write(LOGfile,*)"WF correlated used pairs:",nused
   end subroutine wf_fill_correlated
 
 

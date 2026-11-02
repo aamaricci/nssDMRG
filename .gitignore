@@ -1,7 +1,8 @@
-repo
-*.o
+.DS_Store
 *.mod
+*.o
 build*
 git_version.inc
-.DS_Store
+repo
 src/VERSION.f90
+test/results/

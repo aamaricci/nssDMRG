@@ -13,6 +13,7 @@ MODULE DMRG_SUPERBLOCK_HXV
 #ifdef _MPI
   public :: spMatVec_MPI_cache_main
   public :: spMatVec_MPI_lazy_main
+  public :: spMatMat_MPI_lazy_main
 #endif
 
 
@@ -722,6 +723,188 @@ contains
     t_hxv_direct=t_hxv_direct + t_stop()
     !
   end subroutine spMatVec_MPI_lazy_main
+
+
+  ! Apply the lazy MPI Hamiltonian to a block of local vectors.
+  !
+  ! V and Hv have shape (Nloc,Nvec). Each MPI rank supplies its local rows;
+  ! Hv returns the same local row distribution, while each column is a
+  ! separate vector in the same superblock basis. Every rank must call this
+  ! routine with the same Nvec because the tensor-product kernels communicate
+  ! on sector communicators. Filtered operators are built once per sector and
+  ! Hamiltonian term, then reused for all columns. No full H is assembled.
+  !
+  ! Requires an initialized MPI direct-HxV setup. V and Hv must use the local
+  ! superblock row count supplied by the caller, and every rank must provide
+  ! the same positive number of columns. Error stops identify an inactive MPI
+  ! setup, a local row-count/shape mismatch, or an empty block.
+  subroutine spMatMat_MPI_lazy_main(Nloc,V,Hv)
+    integer,intent(in)                     :: Nloc
+#ifdef _CMPLX
+    complex(8),intent(in)                   :: V(:,:)
+    complex(8),intent(out)                  :: Hv(:,:)
+    complex(8),allocatable                  :: vt(:),Hvt(:)
+    complex(8)                              :: val
+#else
+    real(8),intent(in)                      :: V(:,:)
+    real(8),intent(out)                     :: Hv(:,:)
+    real(8),allocatable                     :: vt(:),Hvt(:)
+    real(8)                                 :: val
+#endif
+    type(sparse_matrix)                     :: Hlk,Hrk,Aop,Bop
+    real(8),allocatable                     :: qn(:),qm(:),dq(:)
+    character(len=:),allocatable            :: type
+    integer                                 :: Nvec,Nso,k,q,iv
+    integer                                 :: ir,il,jr,jcol,i,j
+    integer                                 :: io,jo,i_start,i_end
+    !
+    if(.not.MpiStatus)error stop "spMatMat_MPI_lazy_main: MPI is not active"
+    if(size(V,1)/=Nloc)error stop "spMatMat_MPI_lazy_main: V has wrong local row count"
+    if(any(shape(Hv)/=shape(V)))error stop "spMatMat_MPI_lazy_main: V and Hv shapes differ"
+    Nvec=size(V,2)
+    if(Nvec<1)error stop "spMatMat_MPI_lazy_main: block has no vectors"
+    !
+    Hv=zero
+    t0=t_start()
+#ifdef _PROFILE
+    hxv_detail_active=hxv_detail_profile
+#else
+    hxv_detail_active=.false.
+#endif
+    Nso=Nspin*Norb
+    type=str(left%type())
+    !
+    ! Each sector's lazy filters are shared across the complete vector block.
+    sector: do k=1,size(sb_sector)
+       Hrk=filter_right_operator(Lazy_Hr,k,k)
+       if(hxv_detail_active)t0=t_start()
+       do iv=1,Nvec
+          do il=1,mpiDls(k)
+             do ir=1,Drs(k)
+                i=ir+(il-1)*Drs(k)+mpiOffset(k)
+                do jcol=1,Hrk%row(ir)%Size
+                   val=Hrk%row(ir)%vals(jcol)
+                   jr=Hrk%row(ir)%cols(jcol)
+                   j=jr+(il-1)*Drs(k)+mpiOffset(k)
+                   Hv(i,iv)=Hv(i,iv)+val*V(j,iv)
+                enddo
+             enddo
+          enddo
+       enddo
+       if(hxv_detail_active)t_hxv_local=t_hxv_local+t_stop()
+       call Hrk%free()
+       !
+       Hlk=filter_left_operator(Lazy_Hl,k,k)
+       allocate(vt(mpiDrs(k)*Dls(k)),Hvt(mpiDrs(k)*Dls(k)))
+       i_start=1+mpiOffset(k)
+       i_end=Drs(k)*mpiDls(k)+mpiOffset(k)
+       do iv=1,Nvec
+          vt=zero
+          Hvt=zero
+          if(hxv_detail_active)t0=t_start()
+          call vector_transpose_MPI(Drs(k),mpiDls(k),V(i_start:i_end,iv), &
+               Dls(k),mpiDrs(k),vt,mpiSBCOMM(k))
+          if(hxv_detail_active)t_hxv_mpi=t_hxv_mpi+t_stop()
+          if(hxv_detail_active)t0=t_start()
+          do il=1,mpiDrs(k)
+             do ir=1,Dls(k)
+                i=ir+(il-1)*Dls(k)
+                do jcol=1,Hlk%row(ir)%Size
+                   val=Hlk%row(ir)%vals(jcol)
+                   jr=Hlk%row(ir)%cols(jcol)
+                   j=jr+(il-1)*Dls(k)
+                   Hvt(i)=Hvt(i)+val*vt(j)
+                enddo
+             enddo
+          enddo
+          if(hxv_detail_active)t_hxv_local=t_hxv_local+t_stop()
+          vt=zero
+          if(hxv_detail_active)t0=t_start()
+          call vector_transpose_MPI(Dls(k),mpiDrs(k),Hvt,Drs(k), &
+               mpiDls(k),vt,mpiSBCOMM(k))
+          if(hxv_detail_active)t_hxv_mpi=t_hxv_mpi+t_stop()
+          Hv(i_start:i_end,iv)=Hv(i_start:i_end,iv)+vt
+       enddo
+       deallocate(vt,Hvt)
+       call Hlk%free()
+       !
+       qn=sb_sector%qn(index=k)
+       select case(to_lower(type(1:1)))
+       case("s")
+          Aop=HopH(1,1)*filter_left_operator(Lazy_Sl_n(1),k,k)
+          Bop=filter_right_operator(Lazy_Sr_n(1),k,k)
+          call apply_AxB_MPI_direct_block(Aop,Bop,k,k,0,V,Hv)
+          call Aop%free()
+          call Bop%free()
+          !
+          dq=Lazy_dql_n(:,2)
+          qm=qn-dq
+          if(sb_sector%has_qn(qm))then
+             q=sb_sector%index(qn=qm)
+             Aop=HopH(2,2)*filter_left_operator(Lazy_Sl_n(2),k,q)
+             Bop=filter_right_operator(hconjg(Lazy_Sr_n(2)),k,q)
+             call apply_AxB_MPI_direct_block(Aop,Bop,k,q,0,V,Hv)
+             call apply_AxB_MPI_direct_block(hconjg(Aop),hconjg(Bop),k,q,1,V,Hv)
+             call Aop%free()
+             call Bop%free()
+          endif
+          if(PBCdmrg)then
+             Aop=HopH(1,1)*filter_left_operator(Lazy_Sl_p(1),k,k)
+             Bop=filter_right_operator(Lazy_Sr_p(1),k,k)
+             call apply_AxB_MPI_direct_block(Aop,Bop,k,k,0,V,Hv)
+             call Aop%free()
+             call Bop%free()
+             !
+             qm=qn-Lazy_dql_p(:,2)
+             if(sb_sector%has_qn(qm))then
+                q=sb_sector%index(qn=qm)
+                Aop=HopH(2,2)*filter_left_operator(Lazy_Sl_p(2),k,q)
+                Bop=filter_right_operator(hconjg(Lazy_Sr_p(2)),k,q)
+                call apply_AxB_MPI_direct_block(Aop,Bop,k,q,0,V,Hv)
+                call apply_AxB_MPI_direct_block(hconjg(Aop),hconjg(Bop),k,q,1,V,Hv)
+                call Aop%free()
+                call Bop%free()
+             endif
+          endif
+       case("f","e")
+          do io=1,Nso
+             dq=Lazy_dql_n(:,io)
+             qm=qn-dq
+             if(.not.sb_sector%has_qn(qm))cycle
+             q=sb_sector%index(qn=qm)
+             do jo=1,Nso
+                if(HopH(io,jo)==zero)cycle
+                Aop=HopH(io,jo)*filter_left_operator(Lazy_CdgP_n(io),k,q)
+                Bop=filter_right_operator(Lazy_Cr_n(jo),k,q)
+                call apply_AxB_MPI_direct_block(Aop,Bop,k,q,0,V,Hv)
+                call apply_AxB_MPI_direct_block(hconjg(Aop),hconjg(Bop),k,q,1,V,Hv)
+                call Aop%free()
+                call Bop%free()
+             enddo
+          enddo
+          if(PBCdmrg)then
+             do io=1,Nso
+                dq=Lazy_dql_p(:,io)
+                qm=qn-dq
+                if(.not.sb_sector%has_qn(qm))cycle
+                q=sb_sector%index(qn=qm)
+                do jo=1,Nso
+                   if(HopH(io,jo)==zero)cycle
+                   Aop=HopH(io,jo)*filter_left_operator(Lazy_CdgP_p(io),k,q)
+                   Bop=filter_right_operator(Lazy_Cr_p(jo),k,q)
+                   call apply_AxB_MPI_direct_block(Aop,Bop,k,q,0,V,Hv)
+                   call apply_AxB_MPI_direct_block(hconjg(Aop),hconjg(Bop),k,q,1,V,Hv)
+                   call Aop%free()
+                   call Bop%free()
+                enddo
+             enddo
+          endif
+       end select
+    enddo sector
+    !
+    hxv_detail_active=.false.
+    t_hxv_direct=t_hxv_direct+t_stop()
+  end subroutine spMatMat_MPI_lazy_main
 #endif
 
 
@@ -870,6 +1053,27 @@ contains
     !
     deallocate(C,Ct,Hvt,vt)
   end subroutine apply_AxB_MPI_direct
+
+
+  ! Apply one already-filtered tensor-product term to every vector column.
+  subroutine apply_AxB_MPI_direct_block(Aop,Bop,k,q,is_hconjg,V,Hv)
+    type(sparse_matrix),intent(in)          :: Aop,Bop
+    integer,intent(in)                      :: k,q,is_hconjg
+#ifdef _CMPLX
+    complex(8),intent(in)                    :: V(:,:)
+    complex(8),intent(inout)                 :: Hv(:,:)
+#else
+    real(8),intent(in)                       :: V(:,:)
+    real(8),intent(inout)                    :: Hv(:,:)
+#endif
+    integer                                  :: iv
+    !
+    if(any(shape(V)/=shape(Hv)))error stop &
+         "apply_AxB_MPI_direct_block: V and Hv shapes differ"
+    do iv=1,size(V,2)
+       call apply_AxB_MPI_direct(Aop,Bop,k,q,is_hconjg,V(:,iv),Hv(:,iv))
+    enddo
+  end subroutine apply_AxB_MPI_direct_block
 #endif
 
 

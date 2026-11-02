@@ -82,14 +82,13 @@ MODULE INPUT_VARS
   !or direct on-the-fly H*v product (mem++, cpu--
   logical                      :: direct_H_lazy
   logical                      :: hxv_detail_profile
-  logical                      :: wf_predict_diag,lanc_gs_prediction
+  logical                      :: lanc_target_prediction
   logical                      :: lanc_check_residual
   !flag to use lazy filtering of direct H*v operator blocks (mem--, cpu++)
   integer                      :: verbose
   !Flag to control verbosity of the library
-  ! character(len=12)            :: lanc_method
-  ! !select the lanczos method to be used in the determination of the spectrum.
-  ! !ARPACK (default), LANCZOS (T=0 only) 
+  character(len=16)            :: lanc_method
+  !Eigensolver used for sparse superblock diagonalization: ARPACK or PRIMME.
   real(8)                      :: lanc_tolerance
   !Tolerance for the Lanczos iterations as used in Arpack and plain lanczos. 
   integer                      :: lanc_niter
@@ -309,22 +308,29 @@ contains
     call parse_input_variable(hxv_detail_profile,"HXV_DETAIL_PROFILE",INPUTunit,&
          default=.false.,&
          comment="Profile lazy MPI H*v filtering, local contractions, and transposes")
-    call parse_input_variable(wf_predict_diag,"WF_PREDICT_DIAG",INPUTunit,&
-         default=.false.,&
-         comment="Diagnose a trial wavefunction; do not pass it to ARPACK")
-    !
-    call parse_input_variable(lanc_gs_prediction,"LANC_GS_PREDICTION",INPUTunit,default=.false.,&
-         comment="Predict one GS seed for OBC/PBC iDMRG (LANC_NEIGEN=1)")
+    call parse_input_variable(lanc_target_prediction,"LANC_TARGET_PREDICTION",INPUTunit,default=.false.,&
+         comment="Predict target-state guesses for iDMRG; ARPACK supports LANC_NEIGEN=1, PRIMME supports a block")
     call parse_input_variable(lanc_check_residual,"LANC_CHECK_RESIDUAL",INPUTunit,default=.false.,&
-         comment="Measure absolute Ritz residuals after ARPACK (one extra H*v per state)")
+         comment="Measure absolute Ritz residuals after the sparse eigensolver (one extra H*v per state)")
     !> Lanczos parameters:
-    ! call parse_input_variable(lanc_method,"LANC_METHOD",INPUTunit,default="arpack",&
-    !      comment="select the lanczos method: ARPACK (default), LANCZOS (T=0 only)")
+    call parse_input_variable(lanc_method,"LANC_METHOD",INPUTunit,default="arpack",&
+         comment="Sparse eigensolver: ARPACK (default) or PRIMME.")
+    lanc_method=to_lower(trim(lanc_method))
+    select case(lanc_method)
+    case("arpack","primme")
+       continue
+    case default
+       error stop "read_input ERROR: LANC_METHOD must be ARPACK or PRIMME"
+    end select
     call parse_input_variable(lanc_neigen,"LANC_NEIGEN",INPUTunit,default=2,&
          comment="Number of states per SB sector to be determined.")
-    if(lanc_gs_prediction)then
-       if(to_lower(DMRGtype)/="i")error stop "LANC_GS_PREDICTION requires iDMRG"
-       if(lanc_neigen/=1)error stop "LANC_GS_PREDICTION requires LANC_NEIGEN=1"
+    if(lanc_target_prediction)then
+       if(to_lower(DMRGtype)/="i")error stop "LANC_TARGET_PREDICTION requires iDMRG"
+       if(lanc_method=="arpack".and.lanc_neigen/=1)then
+          if(master)write(LOGfile,*) &
+               "LANC_TARGET_PREDICTION disabled: ARPACK accepts one starting vector and LANC_NEIGEN is not 1"
+          lanc_target_prediction=.false.
+       endif
     endif
 
     call parse_input_variable(gs_deg_threshold,"GS_DEG_THRESHOLD",INPUTunit,&

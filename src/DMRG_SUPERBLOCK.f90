@@ -1,8 +1,10 @@
 MODULE DMRG_SUPERBLOCK
+  USE ISO_C_BINDING, only: c_double,c_int,c_int64_t
   USE DMRG_GLOBAL
   USE DMRG_CONNECT
   USE DMRG_SUPERBLOCK_SETUP
   USE DMRG_SUPERBLOCK_HXV
+  USE SF_SP_LINALG, only: primme_matmat_d,primme_matmat_z,PRIMME_DEFAULT_MIN_MATVECS
 #ifdef _MPI
    USE MPI
    USE SF_MPI
@@ -351,30 +353,30 @@ contains
     real(8),dimension(:),allocatable      :: evals
 #ifdef _CMPLX
     complex(8),dimension(:,:),allocatable :: Hsb,gs_tmp
+    complex(8),allocatable                :: wf_seed_block(:,:)
 #else
     real(8),dimension(:,:),allocatable    :: Hsb,gs_tmp
+    real(8),allocatable                   :: wf_seed_block(:,:)
 #endif
     integer                               :: vecDim,Nloc,m_tmp
+    logical                               :: exist,lanc_solve,fMPI
+    logical                               :: primme_failed
 #ifdef _MPI
-    integer                               :: wf_mpierr
+    logical                               :: primme_failed_global
+    integer                               :: primme_mpierr
 #endif
-    logical                               :: exist,lanc_solve,fMpi
-    logical                               :: wf_available,wf_can_apply
-    real(8)                               :: wf_e,wf_res,wf_weight
+    integer(c_int64_t)                    :: primme_nblock,primme_nitermax
+    integer(c_int64_t)                    :: primme_init_size,primme_numop,primme_niter,primme_nconv
+    integer(c_int)                        :: primme_iexit
 #ifdef _CMPLX
-    complex(8),allocatable                :: wf_loc(:),wf_hloc(:),wf_hfull(:),wf_gsfull(:,:),wf_basis(:,:),wf_seed(:)
-    complex(8)                            :: wf_overlap,wf_rayleigh
+    procedure(primme_matmat_z),pointer    :: primme_matmat_p
 #else
-    real(8),allocatable                   :: wf_loc(:),wf_hloc(:),wf_hfull(:),wf_gsfull(:,:),wf_basis(:,:),wf_seed(:)
-    real(8)                               :: wf_overlap,wf_rayleigh
+    procedure(primme_matmat_d),pointer    :: primme_matmat_p
 #endif
-    integer                               :: wf_i,wf_j,wf_rank
-    real(8)                               :: wf_norm
-    real(8)                               :: wf_filter_weight(3),wf_filter_tau(3)
 #ifdef _CMPLX
-    complex(8),allocatable                :: wf_filter(:)
+    complex(8),allocatable                :: wf_seed(:)
 #else
-    real(8),allocatable                   :: wf_filter(:)
+    real(8),allocatable                   :: wf_seed(:)
 #endif
     !
 #ifdef _DEBUG
@@ -393,205 +395,149 @@ contains
     lanc_solve = .true.
     if(Neigen==m_sb)lanc_solve=.false.
     if(m_sb  <= lanc_dim_threshold)lanc_solve=.false.
+#ifdef _MPI
+    ! PARPACK needs at least one local basis element on every process. When
+    ! the full superblock is smaller than the MPI task count, use the dense
+    ! LAPACK path directly instead of falling back to a serial ARPACK solve.
+    if(MpiStatus.and.m_sb<MpiSize)then
+       lanc_solve=.false.
+       if(MpiMaster)write(LogFile,"(A,I0,A,I0,A)") &
+            "LAPACK: superblock dimension ",m_sb," is smaller than MPI size ",MpiSize, &
+            "; skipping PARPACK."
+    endif
+#endif
     !
     !Allocate EigPairs:
     if(allocated(gs_energy))deallocate(gs_energy)
     allocate(gs_energy(Neigen));gs_energy=zero
     !
     !
-    if(lanc_solve)then          !Use (P)-Arpack
+    if(lanc_solve)then
        !
        call sb_build_Hv()
-       wf_available=.false.
-       if(MpiMaster)wf_available=allocated(wf_trial)
-#ifdef _MPI
-       ! SF_MPI's scalar broadcast has INTENT(IN), so a logical received
-       ! on a non-root rank may be discarded by a compiler temporary.
-       ! Use MPI directly for these two flags before collective scatter.
-       if(MpiStatus)then
-          call MPI_Bcast(wf_available,1,MPI_LOGICAL,0,MpiComm,wf_mpierr)
-          if(wf_mpierr/=MPI_SUCCESS)stop "WF prediction: MPI_Bcast available failed"
-          call MPI_Bcast(wf_trial_correlated,1,MPI_LOGICAL,0,MpiComm,wf_mpierr)
-          if(wf_mpierr/=MPI_SUCCESS)stop "WF prediction: MPI_Bcast correlated failed"
-       endif
-#endif
-       wf_can_apply=wf_available
-#ifdef _MPI
-       if(MpiStatus)then
-          call sb_check_Hv(fMpi)
-          if(fMpi)wf_can_apply=.false.
-       endif
-#endif
-       if(wf_can_apply)then
-          ! Rank zero built the complete candidate. Scatter its contiguous
-          ! pieces into the same local vector layout used by ARPACK's MPI H*v.
-          if(.not.allocated(wf_trial))then
-#ifdef _MPI
-             if(MpiStatus.and..not.MpiMaster)then
-                ! MPI_Scatterv reads the full seed only on rank zero.
-                allocate(wf_trial(1))
-             else
-                allocate(wf_trial(m_sb))
-             endif
-#else
-             allocate(wf_trial(m_sb))
-#endif
-             wf_trial=zero
-          endif
-          allocate(wf_loc(sb_vecDim_Hv()))
-#ifdef _MPI
-          if(MpiStatus)then
-             call scatter_vector_MPI(MpiComm,wf_trial,wf_loc)
-          else
-             wf_loc=wf_trial
-          endif
-#else
-          wf_loc=wf_trial
-#endif
-          if(lanc_gs_prediction.and.wf_trial_correlated)allocate(wf_seed,source=wf_loc)
-          if(wf_predict_diag)then
-             allocate(wf_hloc(size(wf_loc)))
-             call spHtimesV_p(size(wf_loc),wf_loc,wf_hloc)
-             allocate(wf_hfull(m_sb))
-#ifdef _MPI
-          if(MpiStatus)then
-             call gather_vector_MPI(MpiComm,wf_hloc,wf_hfull)
-          else
-             wf_hfull=wf_hloc
-          endif
-#else
-          wf_hfull=wf_hloc
-#endif
-          if(MpiMaster)then
-#ifdef _CMPLX
-             wf_rayleigh=sum(conjg(wf_trial)*wf_hfull)
-#else
-             wf_rayleigh=sum(wf_trial*wf_hfull)
-#endif
-             wf_e=real(wf_rayleigh,8)
-             wf_res=sqrt(sum(abs(wf_hfull-wf_e*wf_trial)**2))
-             if(PBCdmrg)then
-                wf_filter_tau=[0.02d0,0.05d0,0.1d0]
-                allocate(wf_filter(m_sb))
-             endif
-          endif
-          endif
-       endif
+       call sb_prepare_wf_guess(wf_seed,wf_seed_block)
        !
        if(allocated(gs_vector))deallocate(gs_vector)
        vecDim = sb_vecDim_Hv()
        !
        allocate(gs_vector(vecDim,Neigen));gs_vector=zero
        !
-       if(MpiMaster)call start_timer("Diag H_sb")
+       if(MpiMaster)call start_timer("Diag H_sb "//to_upper(str(lanc_method)))
        t0=t_start()
+       select case(lanc_method)
+       case("arpack")
 #ifdef _MPI
-       if(MpiStatus)then
-          !This condition protect against problems too small compared to MpiSize:
-          !Solve serial and scatter the result
-          call sb_check_Hv(fMPI)
-          if(fMpi)then
-             allocate(gs_tmp(m_sb,Neigen))
-             if(MpiMaster)call sp_eigh(spHtimesV_p,gs_energy,gs_tmp,&
-                  Nblock,&
-                  Nitermax,&
-                  tol=lanc_tolerance,&
-                  iverbose=(verbose>4),NumOp=NumOp)
-             call Bcast_MPI(MpiComm,gs_energy)
-             call scatter_vector_MPI(MpiComm,gs_tmp,gs_vector)
-             deallocate(gs_tmp)
+          if(MpiStatus)then
+             call sb_check_Hv(fMPI)
+             if(fMPI)then
+                allocate(gs_tmp(m_sb,Neigen))
+                if(MpiMaster)call sp_eigh(spHtimesV_p,gs_energy,gs_tmp,&
+                     Nblock,&
+                     Nitermax,&
+                     tol=lanc_tolerance,&
+                     iverbose=(verbose>4),NumOp=NumOp)
+                call Bcast_MPI(MpiComm,gs_energy)
+                call scatter_vector_MPI(MpiComm,gs_tmp,gs_vector)
+                deallocate(gs_tmp)
+             else
+                call sp_eigh(MpiComm,spHtimesV_p,gs_energy,gs_vector,&
+                     Nblock,&
+                     Nitermax,&
+                     tol=lanc_tolerance,v0=wf_seed,&
+                     iverbose=(verbose>4),NumOp=NumOp)
+             endif
           else
-             call sp_eigh(MpiComm,spHtimesV_p,gs_energy,gs_vector,&
+             call sp_eigh(spHtimesV_p,gs_energy,gs_vector,&
                   Nblock,&
                   Nitermax,&
                   tol=lanc_tolerance,v0=wf_seed,&
                   iverbose=(verbose>4),NumOp=NumOp)
           endif
-       else
-          call sp_eigh(spHtimesV_p,gs_energy,gs_vector,&
-               Nblock,&
-               Nitermax,&
-               tol=lanc_tolerance,v0=wf_seed,&
-               iverbose=(verbose>4),NumOp=NumOp)
-       endif
 #else
-       call sp_eigh(spHtimesV_p,gs_energy,gs_vector,&
-            Nblock,&
-            Nitermax,&
-            tol=lanc_tolerance,v0=wf_seed,&
-            iverbose=(verbose>4),NumOp=NumOp)
+          call sp_eigh(spHtimesV_p,gs_energy,gs_vector,&
+                  Nblock,&
+                  Nitermax,&
+                  tol=lanc_tolerance,v0=wf_seed,&
+                  iverbose=(verbose>4),NumOp=NumOp)
 #endif
-       if(MpiMaster)call stop_timer("Diag H_sb")
-       t_sb_diag=t_stop()
-       if(MpiMaster.and.wf_predict_diag)write(LOGfile,*)"WF benchmark NumOp, seconds, seeded:",NumOp,t_sb_diag,allocated(wf_seed)
-       if(wf_can_apply.and.wf_predict_diag)then
-          allocate(wf_gsfull(m_sb,Neigen))
+       case("primme")
+          primme_nblock=int(Nblock,c_int64_t)
+          primme_nitermax=int(Nitermax,c_int64_t)
+          primme_init_size=0_c_int64_t
+          primme_numop=0_c_int64_t
+          primme_niter=0_c_int64_t
+          primme_nconv=0_c_int64_t
+          primme_iexit=0_c_int
+          primme_failed=.false.
 #ifdef _MPI
           if(MpiStatus)then
-             call gather_vector_MPI(MpiComm,gs_vector,wf_gsfull)
-          else
-             wf_gsfull=gs_vector
-          endif
-#else
-          wf_gsfull=gs_vector
-#endif
-          if(MpiMaster)then
-             wf_weight=0d0
-             allocate(wf_basis(m_sb,Neigen))
-             wf_basis=zero
-             wf_rank=0
-             do wf_i=1,Neigen
-                wf_rank=wf_rank+1
-                wf_basis(:,wf_rank)=wf_gsfull(:,wf_i)
-                do wf_j=1,wf_rank-1
-#ifdef _CMPLX
-                   wf_overlap=sum(conjg(wf_basis(:,wf_j))*wf_basis(:,wf_rank))
-#else
-                   wf_overlap=sum(wf_basis(:,wf_j)*wf_basis(:,wf_rank))
-#endif
-                   wf_basis(:,wf_rank)=wf_basis(:,wf_rank)-wf_overlap*wf_basis(:,wf_j)
-                enddo
-                wf_norm=sqrt(sum(abs(wf_basis(:,wf_rank))**2))
-                if(wf_norm>1d-12)then
-                   wf_basis(:,wf_rank)=wf_basis(:,wf_rank)/wf_norm
-                else
-                   wf_rank=wf_rank-1
+             call sb_check_Hv(fMPI)
+             if(fMPI)then
+                allocate(gs_tmp(m_sb,Neigen))
+                gs_tmp=zero
+                if(MpiMaster)then
+                   primme_matmat_p=>sb_primme_matmat_serial
+                   if(allocated(wf_seed_block))then
+                      primme_init_size=int(min(size(wf_seed_block,2),Neigen),c_int64_t)
+                      gs_tmp(:,1:primme_init_size)=wf_seed_block(:,1:primme_init_size)
+                   endif
+                   call sp_eigh_primme(gs_energy,gs_tmp,primme_matmat_p,&
+                        method=PRIMME_DEFAULT_MIN_MATVECS,tol=lanc_tolerance,&
+                        Nitermax=primme_nitermax,Nblock=primme_nblock,&
+                        initSize=primme_init_size,iexit=primme_iexit,&
+                        NumOp=primme_numop,Niter=primme_niter,Nconv=primme_nconv)
                 endif
-             enddo
-             do wf_i=1,wf_rank
-#ifdef _CMPLX
-                wf_overlap=sum(conjg(wf_basis(:,wf_i))*wf_trial)
-#else
-                wf_overlap=sum(wf_basis(:,wf_i)*wf_trial)
-#endif
-                wf_weight=wf_weight+abs(wf_overlap)**2
-             enddo
-             write(LOGfile,"(A,ES24.15)")"WF trial Rayleigh energy              :",wf_e
-             write(LOGfile,"(A,ES24.15)")"WF trial residual norm                :",wf_res
-             write(LOGfile,"(A,ES24.15)")"WF trial low-state weight             :",wf_weight
-             if(PBCdmrg)then
-                do wf_j=1,3
-                   wf_filter=wf_trial-wf_filter_tau(wf_j)*(wf_hfull-wf_e*wf_trial)
-                   wf_filter=wf_filter/sqrt(sum(abs(wf_filter)**2))
-                   wf_filter_weight(wf_j)=0d0
-                   do wf_i=1,wf_rank
-#ifdef _CMPLX
-                      wf_overlap=sum(conjg(wf_basis(:,wf_i))*wf_filter)
-#else
-                      wf_overlap=sum(wf_basis(:,wf_i)*wf_filter)
-#endif
-                      wf_filter_weight(wf_j)=wf_filter_weight(wf_j)+abs(wf_overlap)**2
-                   enddo
-                   write(LOGfile,'(A,F7.3,A,ES24.15)') &
-                        "WF filter tau=",wf_filter_tau(wf_j)," low-state weight:",wf_filter_weight(wf_j)
-                enddo
-                deallocate(wf_filter)
+                call Bcast_MPI(MpiComm,gs_energy)
+                call scatter_vector_MPI(MpiComm,gs_tmp,gs_vector)
+                deallocate(gs_tmp)
+             else
+                primme_matmat_p=>sb_primme_matmat_mpi
+                if(allocated(wf_seed_block))then
+                   primme_init_size=int(min(size(wf_seed_block,2),Neigen),c_int64_t)
+                   gs_vector(:,1:primme_init_size)=wf_seed_block(:,1:primme_init_size)
+                endif
+                call sp_eigh_primme(MpiComm,gs_energy,gs_vector,primme_matmat_p,&
+                     method=PRIMME_DEFAULT_MIN_MATVECS,tol=lanc_tolerance,&
+                     Nitermax=primme_nitermax,Nblock=primme_nblock,&
+                     initSize=primme_init_size,iexit=primme_iexit,&
+                     NumOp=primme_numop,Niter=primme_niter,Nconv=primme_nconv)
              endif
-             deallocate(wf_basis)
+          else
+#endif
+             primme_matmat_p=>sb_primme_matmat_serial
+             if(allocated(wf_seed_block))then
+                primme_init_size=int(min(size(wf_seed_block,2),Neigen),c_int64_t)
+                gs_vector(:,1:primme_init_size)=wf_seed_block(:,1:primme_init_size)
+             endif
+             call sp_eigh_primme(gs_energy,gs_vector,primme_matmat_p,&
+                  method=PRIMME_DEFAULT_MIN_MATVECS,tol=lanc_tolerance,&
+                  Nitermax=primme_nitermax,Nblock=primme_nblock,&
+                  initSize=primme_init_size,iexit=primme_iexit,&
+                  NumOp=primme_numop,Niter=primme_niter,Nconv=primme_nconv)
+#ifdef _MPI
           endif
-          deallocate(wf_hloc,wf_hfull,wf_gsfull)
-       endif
-       if(allocated(wf_loc))deallocate(wf_loc)
+#endif
+          NumOp=int(primme_numop)
+          primme_failed=(primme_iexit/=0)
+#ifdef _MPI
+          if(MpiStatus)then
+             call MPI_Allreduce(primme_failed,primme_failed_global,1,MPI_LOGICAL,MPI_LOR, &
+                  MpiComm,primme_mpierr)
+             if(primme_mpierr/=MPI_SUCCESS) &
+                  error stop "sb_diag: MPI_Allreduce of PRIMME status failed"
+             primme_failed=primme_failed_global
+          endif
+#endif
+          if(primme_failed)then
+             if(MpiMaster)write(LOGfile,*) &
+                  "PRIMME failed with status:",primme_iexit," converged states:",primme_nconv
+             error stop "sb_diag ERROR: PRIMME did not complete successfully"
+          endif
+       case default
+          error stop "sb_diag ERROR: unsupported LANC_METHOD"
+       end select
+       if(MpiMaster)call stop_timer("Diag H_sb")
+       t_sb_diag=t_stop()
        !
     else !use LAPACK
        !
@@ -632,6 +578,127 @@ contains
     call sb_delete_Hv()
     !
   end subroutine sb_diag
+
+
+  ! Adapt the scalar superblock HxV callback to the PRIMME serial MatMat API.
+  ! This keeps the serial and empty-rank fallback on the existing HxV path.
+  subroutine sb_primme_matmat_serial(n,nvec,vin,vout)
+    integer,intent(in) :: n,nvec
+#ifdef _CMPLX
+    complex(c_double),intent(in)  :: vin(n,nvec)
+    complex(c_double),intent(out) :: vout(n,nvec)
+#else
+    real(c_double),intent(in)     :: vin(n,nvec)
+    real(c_double),intent(out)    :: vout(n,nvec)
+#endif
+    integer :: iv
+    !
+    if(nvec<1)error stop "sb_primme_matmat_serial: empty vector block"
+    do iv=1,nvec
+       call spHtimesV_p(n,vin(:,iv),vout(:,iv))
+    enddo
+  end subroutine sb_primme_matmat_serial
+
+
+#ifdef _MPI
+  ! Adapt the MPI superblock callback to the PRIMME distributed MatMat API.
+  ! Lazy HxV filters are shared across columns; cached and sparse paths reuse
+  ! their existing scalar callback for each column.
+  subroutine sb_primme_matmat_mpi(n,nvec,vin,vout)
+    integer,intent(in) :: n,nvec
+#ifdef _CMPLX
+    complex(c_double),intent(in)  :: vin(n,nvec)
+    complex(c_double),intent(out) :: vout(n,nvec)
+#else
+    real(c_double),intent(in)     :: vin(n,nvec)
+    real(c_double),intent(out)    :: vout(n,nvec)
+#endif
+    integer :: iv
+    !
+    if(nvec<1)error stop "sb_primme_matmat_mpi: empty vector block"
+    if(.not.MpiStatus)error stop "sb_primme_matmat_mpi: MPI is not active"
+    if(direct_H_lazy.and..not.sparse_H)then
+       call spMatMat_MPI_lazy_main(n,vin,vout)
+    else
+       do iv=1,nvec
+          call spHtimesV_p(n,vin(:,iv),vout(:,iv))
+       enddo
+    endif
+  end subroutine sb_primme_matmat_mpi
+#endif
+
+
+  ! Prepare the distributed target-state seed. Rank zero owns wf_trial; the
+  ! eigensolver receives a local vector for ARPACK or a local block for PRIMME.
+  subroutine sb_prepare_wf_guess(wf_seed,wf_seed_block)
+#ifdef _CMPLX
+    complex(8),allocatable,intent(out)      :: wf_seed(:),wf_seed_block(:,:)
+    complex(8),allocatable                 :: wf_loc(:,:)
+#else
+    real(8),allocatable,intent(out)        :: wf_seed(:),wf_seed_block(:,:)
+    real(8),allocatable                    :: wf_loc(:,:)
+#endif
+    logical                                :: wf_available,fMPI
+    integer                                :: mpierr,nvalid
+    ! Collectively decide whether a root-owned trial block is available.
+    wf_available=.false.
+    fMPI=.false.
+    nvalid=0
+    if(MpiMaster)then
+       wf_available=allocated(wf_trial)
+       nvalid=wf_trial_nvalid
+    endif
+#ifdef _MPI
+    if(MpiStatus)then
+       call MPI_Bcast(wf_available,1,MPI_LOGICAL,0,MpiComm,mpierr)
+       if(mpierr/=MPI_SUCCESS)error stop "sb_prepare_wf_guess: MPI_Bcast availability failed"
+       call MPI_Bcast(wf_trial_correlated,1,MPI_LOGICAL,0,MpiComm,mpierr)
+       if(mpierr/=MPI_SUCCESS)error stop "sb_prepare_wf_guess: MPI_Bcast correlated flag failed"
+       call MPI_Bcast(nvalid,1,MPI_INTEGER,0,MpiComm,mpierr)
+       if(mpierr/=MPI_SUCCESS)error stop "sb_prepare_wf_guess: MPI_Bcast guess count failed"
+    endif
+#endif
+    if(.not.wf_available.or.nvalid==0)return
+#ifdef _MPI
+    ! Empty-row ranks use a serial fallback. PRIMME can receive the complete
+    ! root-owned block there; ARPACK retains its usual unseeded fallback.
+    if(MpiStatus)then
+       call sb_check_Hv(fMPI)
+       if(fMPI)then
+          if(lanc_method=="primme".and.lanc_target_prediction.and.wf_trial_correlated)then
+             if(MpiMaster)allocate(wf_seed_block,source=wf_trial(:,1:nvalid))
+          endif
+          return
+       endif
+    endif
+#endif
+    ! Rank zero supplies the complete block; other ranks allocate a send-buffer
+    ! placeholder, then every column follows the normal local SB vector layout.
+    if(.not.allocated(wf_trial))then
+       allocate(wf_trial(1,nvalid))
+       wf_trial=zero
+    endif
+    allocate(wf_loc(sb_vecDim_Hv(),nvalid))
+#ifdef _MPI
+    if(MpiStatus)then
+       call scatter_vector_MPI(MpiComm,wf_trial(:,1:nvalid),wf_loc)
+    else
+       wf_loc=wf_trial(:,1:nvalid)
+    endif
+#else
+    wf_loc=wf_trial(:,1:nvalid)
+#endif
+    if(lanc_target_prediction.and.wf_trial_correlated)then
+       select case(lanc_method)
+       case("arpack")
+          ! Input validation guarantees one requested state for ARPACK.
+          allocate(wf_seed,source=wf_loc(:,1))
+       case("primme")
+          allocate(wf_seed_block,source=wf_loc)
+       end select
+    endif
+  end subroutine sb_prepare_wf_guess
+
 
   subroutine sb_check_ritz_residuals()
     integer :: k,nloc
@@ -685,7 +752,7 @@ contains
 #endif
     real(8),dimension(:),allocatable               :: qn
     integer                                        :: q,m_sb,Nsb,irank,vecDim
-    logical :: fMPI
+    logical                                        :: fMPI
     !
 #ifdef _DEBUG
     if(MpiMaster)write(LOGfile,*)"DEBUG: SuperBlock build H*v"
@@ -754,7 +821,7 @@ contains
 #ifdef _MPI
           if(MpiStatus)then
              call sb_check_Hv(fMPI)
-             if(fMPI)then  !this is true for all nodes at once see sb_vecDim_Hv
+             if(fMPI)then
                 write(LogFile,"(A)")"ARPACK: using SERIAL over MPI as MpiSize > N"
                 if(direct_H_lazy)then
                    spHtimesV_p => spMatVec_lazy_main

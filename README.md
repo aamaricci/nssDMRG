@@ -229,20 +229,17 @@ subsequent DMRG trajectory before relaxing the solver tolerance further.
 `||H*psi_i-E_i*psi_i||` after each solve, at the cost of one extra `H*v` per
 returned state.
 
-`LANC_GS_PREDICTION=T` enables a correlated wavefunction guess for **OBC or
-PBC iDMRG with `LANC_NEIGEN=1`**. It is `F` by default. The guess uses the
-previous superblock wavefunction and the left/right truncation isometries;
-the two partially contracted half states are joined through an SVD
-pseudoinverse of the previous center. The first growth steps use the usual
-ARPACK initialization until this history exists. The implementation rejects
-finite DMRG and `LANC_NEIGEN>1` when the option is enabled. A single
-predicted GS vector does not reliably initialize a search for two states:
-in the BHZ OBC tests it gave little benefit at strict tolerance and could
-converge a higher level instead of the first excitation at looser tolerance.
-The small OBC benchmark with one state reduced the eligible-step `H*v`
-count from 150 to 60 at `LANC_TOLERANCE=1d-10`, with energies agreeing within
-`2d-14` per site. `WF_PREDICT_DIAG=T` enables extra trial-state measurements
-for development; it is not required for prediction.
+`LANC_TARGET_PREDICTION=T` enables a correlated wavefunction guess for
+**OBC or PBC iDMRG**. It is `F` by default and is unavailable for finite
+DMRG. The guess uses the previous target-state wavefunctions and the
+left/right truncation isometries; the two partially contracted half states
+are joined through an SVD pseudoinverse of the previous center. The first
+growth steps use the solver's usual initialization until this history exists.
+ARPACK accepts this prediction only with `LANC_NEIGEN=1`; input parsing turns
+the option off otherwise. PRIMME accepts an orthonormal block of predictions
+for all requested states. The earlier BHZ OBC benchmark with one state
+reduced the eligible-step `H*v` count from 150 to 60 at
+`LANC_TOLERANCE=1d-10`, with energies agreeing within `2d-14` per site.
 
 In a BHZ PBC test with `LDMRG=10`, `MDMRG=20`, and four MPI ranks, the
 eligible diagonalizations fell from 50-55 to 30-35 `H*v` products, with
