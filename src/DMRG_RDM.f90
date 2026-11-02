@@ -414,28 +414,31 @@ contains
 
 
   subroutine wf_prepare_center(link)
-    character(len=1),intent(in) :: link
-    type(tbasis) :: basis_l,basis_r
-    integer :: k,i,j,a
-    real(8) :: wf_tbegin,wf_tend
+    character(len=1),intent(in)       :: link
+    type(tbasis)                      :: basis_l,basis_r
+    integer                           :: k,i,j,a
+    real(8)                           :: wf_tbegin,wf_tend
 #ifdef _CMPLX
-    complex(8),allocatable :: fcenter(:,:)
+    complex(8),allocatable            :: fcenter(:,:)
 #else
-    real(8),allocatable :: fcenter(:,:)
+    real(8),allocatable               :: fcenter(:,:)
 #endif
+    ! This history is assembled on the master from the gathered GS vector.
+    ! Other ranks receive only the final trial vector before ARPACK starts.
     if((.not.wf_predict_diag.and..not.lanc_gs_prediction).or..not.MpiMaster)return
     if(.not.allocated(wf_old_psi))return
     if(.not.allocated(wf_ul).or..not.allocated(wf_ur))return
+    ! Build the next correlated pair and update the retained center.
     call cpu_time(wf_tbegin)
     call wf_predict_correlated(link)
     call cpu_time(wf_tend)
     if(wf_predict_diag)write(LOGfile,*)"WF correlated construction CPU seconds:",wf_tend-wf_tbegin
     if(allocated(wf_center))deallocate(wf_center)
     allocate(wf_center(size(wf_ul,2),size(wf_ur,2)))
-    ! C = U_L^dagger Psi U_R^*. Reuse F=U_L^dagger Psi when the
-    ! correlated prediction constructed it. The first step forms F
-    ! directly from the allowed superblock amplitudes. This avoids
-    ! O(dim(SB)*M_L*M_R) work in the old nested contraction.
+    ! The retained center is Cnew = U_L^dagger Psi U_R^*. Reuse
+    ! F = U_L^dagger Psi from the correlated contraction when available.
+    ! Before both isometries exist, form F from the allowed SB amplitudes.
+    ! This replaces O(dim(SB)*M_L*M_R) scalar work with matrix products.
     if(.not.allocated(wf_f))then
        allocate(fcenter(size(wf_ul,2),size(wf_ur,1)))
        fcenter=zero
@@ -471,7 +474,8 @@ contains
     if(allocated(wf_qn_r))deallocate(wf_qn_r)
     wf_qn_l=basis_l%dump()
     wf_qn_r=basis_r%dump()
-    call basis_l%free();call basis_r%free()
+    call basis_l%free()
+    call basis_r%free()
   end subroutine wf_prepare_center
 
 
@@ -480,28 +484,42 @@ contains
   ! order used when the old blocks were enlarged: n = oldL.siteL / siteR.oldR,
   ! p = siteL.oldL / oldR.siteR. Keeping this order is essential in PBC,
   ! where the next two sites are added at the opposite ends of the blocks.
+  !
+  ! Let Psi be the previous superblock coefficient matrix and let
+  ! Cprev = U_L^dagger Psi U_R^* be its retained center. The half tensors
+  ! F = U_L^dagger Psi and G = Psi U_R^* retain the correlations between
+  ! each block and its adjacent physical site. Contracting
+  ! Theta = F Cprev^+ G estimates the two-site state in the enlarged blocks.
+  ! The SVD pseudoinverse suppresses center singular values below the
+  ! relative cutoff, avoiding inversion of discarded Schmidt directions.
   subroutine wf_predict_correlated(link)
-    character(len=1),intent(in) :: link
-    integer :: ml,mr,dl,dr,nl,nr,k,i,j,a,b
-    real(8),allocatable :: singular(:)
+    character(len=1),intent(in)       :: link
+    integer                           :: ml,mr,dl,dr,nl,nr,k,i,j,a,b
+    real(8),allocatable               :: singular(:)
 #ifdef _CMPLX
-    complex(8),allocatable :: u(:,:),vh(:,:)
+    complex(8),allocatable            :: u(:,:),vh(:,:)
 #else
-    real(8),allocatable :: u(:,:),vh(:,:)
+    real(8),allocatable               :: u(:,:),vh(:,:)
 #endif
     if(allocated(wf_f))deallocate(wf_f)
     if(allocated(wf_g))deallocate(wf_g)
     if(allocated(wf_ci))deallocate(wf_ci)
+    ! No correlated continuation is possible until the previous center
+    ! and both previous truncation isometries have been saved.
     if(.not.allocated(wf_center))return
     wf_pair_link=link
-    ml=size(wf_center,1);mr=size(wf_center,2)
-    dl=size(wf_ul,1)/ml;dr=size(wf_ur,1)/mr
+    ml=size(wf_center,1)
+    mr=size(wf_center,2)
+    dl=size(wf_ul,1)/ml
+    dr=size(wf_ur,1)/mr
     if(dl/=dr) return
-    nl=size(wf_ul,2);nr=size(wf_ur,2)
+    nl=size(wf_ul,2)
+    nr=size(wf_ur,2)
     ! Project only the nonzero superblock amplitudes. A dense Psi or
     ! four-index predicted tensor costs O(d^2 M^2) memory in PBC.
     allocate(wf_f(nl,size(wf_ur,1)),wf_g(size(wf_ul,1),nr))
-    wf_f=zero;wf_g=zero
+    wf_f=zero
+    wf_g=zero
     do k=1,size(wf_old_states)
        i=(wf_old_states(k)-1)/wf_old_nr+1
        j=mod(wf_old_states(k)-1,wf_old_nr)+1
@@ -538,35 +556,47 @@ contains
   end subroutine wf_predict_correlated
 
   subroutine wf_build_trial(link)
-    character(len=1),intent(in) :: link
-    type(tbasis) :: basis_l,basis_r,site_l,site_r
-    integer :: dL,dR,mL,mR,k,il,ir,sl,sr,xl,xr,pL,pR,pSL,pSR,phase,npair
-    real(8),allocatable :: ql(:),qr(:),qsl(:),qsr(:),delta(:)
-    real(8) :: norm
+    character(len=1),intent(in)       :: link
+    type(tbasis)                      :: basis_l,basis_r,site_l,site_r
+    integer                           :: dL,dR,mL,mR,k,il,ir,sl,sr,xl,xr
+    integer                           :: pL,pR,pSL,pSR,phase,npair
+    real(8),allocatable               :: ql(:),qr(:),qsl(:),qsr(:),delta(:)
+    real(8)                           :: norm
+    ! Map the predicted pair into the current superblock basis. For PBC,
+    ! link is the new ordering; wf_pair_link below remains the old ordering
+    ! used to build F and G in the preceding step.
     wf_trial_correlated=.false.
     if(allocated(wf_trial))deallocate(wf_trial)
     if((.not.wf_predict_diag.and..not.lanc_gs_prediction).or..not.MpiMaster)return
+    ! Until a previous target state and truncation isometries are available,
+    ! leave the initial guess to the eigensolver.
     if(.not.allocated(wf_center))return
     if(.not.allocated(wf_qn_l).or..not.allocated(wf_qn_r))return
-    mL=size(wf_center,1); mR=size(wf_center,2)
-    dL=dot(left%length)%dim; dR=dot(left%length+2)%dim
+    mL=size(wf_center,1)
+    mR=size(wf_center,2)
+    dL=dot(left%length)%dim
+    dR=dot(left%length+2)%dim
     if(dL/=dR.or.left%dim/=mL*dL.or.right%dim/=mR*dR)return
     call left%get_basis(basis_l)
     call right%get_basis(basis_r)
     call dot(left%length)%get_basis(site_l)
     call dot(left%length+2)%get_basis(site_r)
     allocate(delta,source=current_target_qn-wf_old_target)
-    allocate(wf_trial(size(sb_states)));wf_trial=zero
+    allocate(wf_trial(size(sb_states)))
+    wf_trial=zero
     npair=0
     do sl=1,dL
        do sr=1,dR
-          qsl=site_l%qn(sl); qsr=site_r%qn(sr)
+          qsl=site_l%qn(sl)
+          qsr=site_r%qn(sr)
           if(all(abs(qsl+qsr-delta)<1d-8))npair=npair+1
        enddo
     enddo
     if(npair==0)then
-       call basis_l%free();call basis_r%free()
-       call site_l%free();call site_r%free()
+       call basis_l%free()
+       call basis_r%free()
+       call site_l%free()
+       call site_r%free()
        deallocate(wf_trial)
        if(allocated(wf_f))deallocate(wf_f)
        if(allocated(wf_g))deallocate(wf_g)
@@ -576,28 +606,42 @@ contains
     if(allocated(wf_f))then
        call wf_fill_correlated(link,dL,dR,mL,mR,delta,site_l,site_r)
     else
+       ! Bootstrap from the retained center and a uniform superposition over
+       ! allowed local pairs. Later steps use the correlated F Cprev^+ G path.
+       ! The explicit phases reorder the fermionic factors into this link's
+       ! tensor-product basis.
        do k=1,size(sb_states)
           xl=(sb_states(k)-1)/right%dim+1
           xr=mod(sb_states(k)-1,right%dim)+1
           select case(link)
           case('n')
-             il=(xl-1)/dL+1; sl=mod(xl-1,dL)+1
-             sr=(xr-1)/mR+1; ir=mod(xr-1,mR)+1
-             ql=basis_l%qn(xl); qr=basis_r%qn(xr)
-             qsl=site_l%qn(sl); qsr=site_r%qn(sr)
+             il=(xl-1)/dL+1
+             sl=mod(xl-1,dL)+1
+             sr=(xr-1)/mR+1
+             ir=mod(xr-1,mR)+1
+             ql=basis_l%qn(xl)
+             qr=basis_r%qn(xr)
+             qsl=site_l%qn(sl)
+             qsr=site_r%qn(sr)
           case('p')
-             sl=(xl-1)/mL+1; il=mod(xl-1,mL)+1
-             ir=(xr-1)/dR+1; sr=mod(xr-1,dR)+1
-             ql=basis_l%qn(xl); qr=basis_r%qn(xr)
-             qsl=site_l%qn(sl); qsr=site_r%qn(sr)
+             sl=(xl-1)/mL+1
+             il=mod(xl-1,mL)+1
+             ir=(xr-1)/dR+1
+             sr=mod(xr-1,dR)+1
+             ql=basis_l%qn(xl)
+             qr=basis_r%qn(xr)
+             qsl=site_l%qn(sl)
+             qsr=site_r%qn(sr)
           end select
           if(.not.all(abs(qsl+qsr-delta)<1d-8))cycle
           if(any(abs(ql-qsl-wf_qn_l(il,:))>1d-8))error stop "WF trial: left tensor order/QN mismatch"
           if(any(abs(qr-qsr-wf_qn_r(ir,:))>1d-8))error stop "WF trial: right tensor order/QN mismatch"
           ! Fermion parity of a tensor product is additive modulo two.
           ! The old block parities follow by subtracting the site QNs.
-          pL=mod(nint(sum(ql-qsl)),2); pR=mod(nint(sum(qr-qsr)),2)
-          pSL=mod(nint(sum(qsl)),2); pSR=mod(nint(sum(qsr)),2)
+          pL=mod(nint(sum(ql-qsl)),2)
+          pR=mod(nint(sum(qr-qsr)),2)
+          pSL=mod(nint(sum(qsl)),2)
+          pSR=mod(nint(sum(qsr)),2)
           select case(link)
           case('n') ! L,R,sL,sR -> L,sL,sR,R
              phase=1-2*mod(pR*(pSL+pSR),2)
@@ -615,8 +659,10 @@ contains
     else
        deallocate(wf_trial)
     endif
-    call basis_l%free();call basis_r%free()
-    call site_l%free();call site_r%free()
+    call basis_l%free()
+    call basis_r%free()
+    call site_l%free()
+    call site_r%free()
     ! ARPACK no longer needs the projected tensors once its seed is formed.
     if(allocated(wf_f))deallocate(wf_f)
     if(allocated(wf_g))deallocate(wf_g)
@@ -627,39 +673,50 @@ contains
   ! Form one site pair at a time and place only its allowed components
   ! into the superblock vector. This avoids storing O(d^2 M^2) amplitudes.
   subroutine wf_fill_correlated(link,dl,dr,ml,mr,delta,site_l,site_r)
-    character(len=1),intent(in) :: link
-    integer,intent(in) :: dl,dr,ml,mr
-    real(8),intent(in) :: delta(:)
-    type(tbasis) :: site_l,site_r
-    integer,allocatable :: head(:,:),next(:)
-    integer :: k,xl,xr,il,ir,sl,sr,a,b,nl,nr,oldml,oldmr,nused
-    real(8),allocatable :: qsl(:),qsr(:)
+    character(len=1),intent(in)       :: link
+    integer,intent(in)                :: dl,dr,ml,mr
+    real(8),intent(in)                :: delta(:)
+    type(tbasis),intent(inout)        :: site_l,site_r
+    integer,allocatable               :: head(:,:),next(:)
+    integer                           :: k,xl,xr,il,ir,sl,sr,a,b
+    integer                           :: nl,nr,oldml,oldmr,nused
+    real(8),allocatable               :: qsl(:),qsr(:)
 #ifdef _CMPLX
-    complex(8),allocatable :: fv(:,:),gv(:,:),tmp(:,:),pair(:,:)
+    complex(8),allocatable            :: fv(:,:),gv(:,:),tmp(:,:),pair(:,:)
 #else
-    real(8),allocatable :: fv(:,:),gv(:,:),tmp(:,:),pair(:,:)
+    real(8),allocatable               :: fv(:,:),gv(:,:),tmp(:,:),pair(:,:)
 #endif
-    nl=size(wf_f,1);nr=size(wf_g,2)
-    oldml=size(wf_ci,2);oldmr=size(wf_ci,1)
+    ! Bucket superblock entries by their physical site pair. For each pair,
+    ! contract one M_L-by-M_R slice and immediately place it in wf_trial;
+    ! this avoids storing the full four-index Theta tensor.
+    nl=size(wf_f,1)
+    nr=size(wf_g,2)
+    oldml=size(wf_ci,2)
+    oldmr=size(wf_ci,1)
     allocate(head(dl,dr),next(size(sb_states)))
-    head=0;next=0
+    head=0
+    next=0
     do k=1,size(sb_states)
        xl=(sb_states(k)-1)/right%dim+1
        xr=mod(sb_states(k)-1,right%dim)+1
        select case(link)
        case('n')
-          sl=mod(xl-1,dl)+1;sr=(xr-1)/mr+1
+          sl=mod(xl-1,dl)+1
+          sr=(xr-1)/mr+1
        case('p')
-          sl=(xl-1)/ml+1;sr=mod(xr-1,dr)+1
+          sl=(xl-1)/ml+1
+          sr=mod(xr-1,dr)+1
        end select
-       next(k)=head(sl,sr);head(sl,sr)=k
+       next(k)=head(sl,sr)
+       head(sl,sr)=k
     enddo
     allocate(fv(nl,oldmr),gv(oldml,nr),tmp(nl,oldml),pair(nl,nr))
     nused=0
     do sl=1,dl
        do sr=1,dr
           if(head(sl,sr)==0)cycle
-          qsl=site_l%qn(sl);qsr=site_r%qn(sr)
+          qsl=site_l%qn(sl)
+          qsr=site_r%qn(sr)
           if(any(abs(qsl+qsr-delta)>1d-8))cycle
           nused=nused+1
           do b=1,oldmr
@@ -688,9 +745,11 @@ contains
              xr=mod(sb_states(k)-1,right%dim)+1
              select case(link)
              case('n')
-                il=(xl-1)/dl+1;ir=mod(xr-1,mr)+1
+                il=(xl-1)/dl+1
+                ir=mod(xr-1,mr)+1
              case('p')
-                il=mod(xl-1,ml)+1;ir=(xr-1)/dr+1
+                il=mod(xl-1,ml)+1
+                ir=(xr-1)/dr+1
              end select
              wf_trial(k)=pair(il,ir)
              k=next(k)

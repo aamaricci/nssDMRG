@@ -494,9 +494,15 @@ contains
   !####################################################################
 #ifdef _MPI
   subroutine vector_transpose_MPI(nrow,qcol,a,ncol,qrow,b,sub_comm)
-    ! The input has contiguous blocks of columns distributed over MpiSize ranks.
-    ! The result has contiguous blocks of rows on the same ranks.  A sector
-    ! communicator contains the first active global ranks, in the same order.
+    ! Transpose a distributed Nrow-by-Ncol matrix between two layouts.
+    !
+    ! On input, each rank owns A(Nrow,Qcol), where Qcol is its contiguous
+    ! block of columns. On output, the same rank owns B(Ncol,Qrow), its
+    ! contiguous block of rows in the transposed matrix. The active sector
+    ! communicator contains the first active global ranks in global order.
+    ! This routine is collective on Sub_comm; a null communicator is a no-op.
+    ! The global dimensions and local extents must match the standard
+    ! block distribution over MpiSize ranks.
     integer,intent(in)                  :: nrow,qcol,ncol,qrow,sub_comm
 #ifdef _CMPLX
     complex(8),intent(in)               :: a(nrow,qcol)
@@ -515,7 +521,9 @@ contains
     !
     if(sub_comm==MPI_COMM_NULL)return
     call MPI_Comm_size(sub_comm,comm_size,ierr)
+    if(ierr/=MPI_SUCCESS)error stop "vector_transpose_MPI: MPI_Comm_size failed"
     call MPI_Comm_rank(sub_comm,comm_rank,ierr)
+    if(ierr/=MPI_SUCCESS)error stop "vector_transpose_MPI: MPI_Comm_rank failed"
     if(comm_rank/=MpiRank)error stop "vector_transpose_MPI: unexpected sector rank order"
     if(qcol/=ncol/MpiSize+merge(1,0,comm_rank<mod(ncol,MpiSize)))&
          error stop "vector_transpose_MPI: wrong local column count"

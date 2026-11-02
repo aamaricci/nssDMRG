@@ -250,11 +250,12 @@ energies agreeing within `3.2d-14` per site. The contraction forms one local
 site pair at a time to avoid a four-index wavefunction tensor. Peak memory
 and wall-time gain at `MDMRG=500` have not yet been measured.
 
-The current predictor has a direct dense contraction with a work cap and
-can skip a step when that cap is exceeded. It has been tested numerically
-with one MPI rank; multi-rank execution still needs a numerical comparison.
-The alternating `n/p` growth used for PBC requires a separate transport
-between the two physical block edges and is not covered by this option.
+The predictor forms the projected half states in the previous link ordering,
+then places amplitudes in the current superblock ordering. This distinction
+is needed because PBC alternates `n` and `p` growth, which add the physical
+sites at opposite block edges. The streamed contraction avoids storing a
+dense four-index tensor; its peak memory and wall-time at `MDMRG=500` remain
+to be measured.
 
 
 

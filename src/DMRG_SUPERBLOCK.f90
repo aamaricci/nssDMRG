@@ -423,6 +423,8 @@ contains
        endif
 #endif
        if(wf_can_apply)then
+          ! Rank zero built the complete candidate. Scatter its contiguous
+          ! pieces into the same local vector layout used by ARPACK's MPI H*v.
           if(.not.allocated(wf_trial))then
 #ifdef _MPI
              if(MpiStatus.and..not.MpiMaster)then
@@ -535,7 +537,8 @@ contains
 #endif
           if(MpiMaster)then
              wf_weight=0d0
-             allocate(wf_basis(m_sb,Neigen));wf_basis=zero
+             allocate(wf_basis(m_sb,Neigen))
+             wf_basis=zero
              wf_rank=0
              do wf_i=1,Neigen
                 wf_rank=wf_rank+1

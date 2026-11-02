@@ -308,13 +308,13 @@ contains
          comment="Direct H*v: True = lazily filter QN operator blocks during MVP; False=cache filtered operator blocks")
     call parse_input_variable(hxv_detail_profile,"HXV_DETAIL_PROFILE",INPUTunit,&
          default=.false.,&
-         comment="Profile lazy MPI H*v filtering, local contractions and MPI transposes")
+         comment="Profile lazy MPI H*v filtering, local contractions, and transposes")
     call parse_input_variable(wf_predict_diag,"WF_PREDICT_DIAG",INPUTunit,&
          default=.false.,&
          comment="Diagnose a trial wavefunction; do not pass it to ARPACK")
     !
     call parse_input_variable(lanc_gs_prediction,"LANC_GS_PREDICTION",INPUTunit,default=.false.,&
-         comment="Predict the ground-state seed for iDMRG (LANC_NEIGEN=1)")
+         comment="Predict one GS seed for OBC/PBC iDMRG (LANC_NEIGEN=1)")
     call parse_input_variable(lanc_check_residual,"LANC_CHECK_RESIDUAL",INPUTunit,default=.false.,&
          comment="Measure absolute Ritz residuals after ARPACK (one extra H*v per state)")
     !> Lanczos parameters:

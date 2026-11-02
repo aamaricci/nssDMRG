@@ -56,9 +56,9 @@ coincidono con il run senza diagnostica. Il peso e' troppo piccolo per
 usare questo candidato come seme; il prossimo esperimento deve usare
 le isometrie di due passi per predire anche la coppia locale.
 
-## Correlated OBC prototype
+## Correlated OBC/PBC prediction
 
-For OBC growth the retained half states are contracted as
+For either boundary condition the retained half states are contracted as
 `F=UL^dagger Psi`, `G=Psi UR*`, and
 `Theta(a,s,t,b)=sum F(a,s,beta) Cprev^+(beta,alpha) G(alpha,t,b)`.
 `Cprev` refers to the actual old block bases, with no eigenvector matching.
@@ -66,13 +66,21 @@ The pseudoinverse uses SVD and a relative cutoff 1e-10. No explicit extra
 fermionic permutation is applied to this same-edge contraction; the
 ordered tensor coefficients are carried by the half states.
 
+The previous link selects the tensor slices used to form `F` and `G`;
+the current link selects the target coefficient positions. This is identical
+for OBC but essential for PBC, where growth alternates between adding sites
+at the inner and outer edges. In detail, `n` uses the previous grouping
+`(oldL,siteL)/(siteR,oldR)` while `p` uses `(siteL,oldL)/(oldR,siteR)`;
+these orderings must not be interchanged when forming the half tensors.
+
 `LANC_GS_PREDICTION=T` supplies this candidate to ARPACK for iDMRG
 with `LANC_NEIGEN=1`, in OBC or PBC. It does not require `WF_PREDICT_DIAG=T`.
 The first two steps retain the usual solver initialization. See
 `test/results/wf_obc/README.md` for the BHZ experiment: excellent overlap
 and fewer products for one eigenstate, but no improvement for two.
-The OBC experiment predates the streamed implementation. The same projected
-contraction is now used in both boundary conditions.
+The OBC experiment predates the streamed implementation. The projected
+contraction is now shared by both boundary conditions, with link-aware index
+maps and streamed construction of the trial vector.
 
 ## PBC single-step filter probe
 

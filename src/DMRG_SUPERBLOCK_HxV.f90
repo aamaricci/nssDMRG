@@ -573,6 +573,9 @@ contains
     Hv=zero
     t0=t_start()
 #ifdef _PROFILE
+    ! The detailed timers split each sector's lazy MVP into sparse filtering,
+    ! local contractions, and distributed-layout transposes. MPI transpose
+    ! time includes the complete collective routine, including synchronization.
     hxv_detail_active=hxv_detail_profile
 #endif
     Nso=Nspin*Norb
