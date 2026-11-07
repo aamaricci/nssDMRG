@@ -26,8 +26,9 @@ The structure of this code is largely inspired by the excellent simple-DMRG proj
   - [Milestone 10](#milestone10) Fix Symmetry Fragmentation using MPI sub-communicators.
   - [Milestone 11](#milestone11) Lazy direct MVP operator filtering.
   - [Milestone 12](#milestone12) Memory management and further optimizations. Fix restart and checkpointing.
-  - [Milestone 13](#milestone13) Structure factors and polarization/topological marker.
+  - [Milestone 13](#milestone13) Observables and multi-point static correlation functions. Structure factors and topological marker.
   - [Milestone 14](#milestone14) Change in the QN target definition.
+  - [Milestone 15](#milestone15) Wave-function prediction and PRIMME eigensolver interface.
 - [Results](#results)
     
 ## <a name="dependencies"></a> Dependencies
@@ -218,7 +219,7 @@ only at the moment when that contribution is applied to the vector. Thus the mem
 
 <sup>For MPI builds compiled with profiling, `HXV_DETAIL_PROFILE = T` adds `time_hxv_filter`, `time_hxv_local`, and `time_hxv_mpi` to `full_profile_iDMRG.dmrg` when the lazy direct MVP is used. The last timer covers the entire `vector_transpose_MPI` call, including its setup, MPI collectives, local transpose, and synchronization. Each reported timer is the maximum over ranks; their values need not add up exactly to `time_hxv_direct`. The option defaults to `F` and does not change the Hamiltonian application.</sup>
 
-#### ARPACK tolerance and ground-state prediction
+###### ARPACK tolerance and residual checks
 
 `LANC_TOLERANCE` defaults to `1d-10`. It is an ARPACK relative Ritz
 convergence tolerance; `GS_DEG_THRESHOLD` remains a separate absolute energy
@@ -229,30 +230,8 @@ subsequent DMRG trajectory before relaxing the solver tolerance further.
 `||H*psi_i-E_i*psi_i||` after each solve, at the cost of one extra `H*v` per
 returned state.
 
-`LANC_TARGET_PREDICTION=T` enables a correlated wavefunction guess for
-**OBC or PBC iDMRG**. It is `F` by default and is unavailable for finite
-DMRG. The guess uses the previous target-state wavefunctions and the
-left/right truncation isometries; the two partially contracted half states
-are joined through an SVD pseudoinverse of the previous center. The first
-growth steps use the solver's usual initialization until this history exists.
-ARPACK accepts this prediction only with `LANC_NEIGEN=1`; input parsing turns
-the option off otherwise. PRIMME accepts an orthonormal block of predictions
-for all requested states. The earlier BHZ OBC benchmark with one state
-reduced the eligible-step `H*v` count from 150 to 60 at
-`LANC_TOLERANCE=1d-10`, with energies agreeing within `2d-14` per site.
-
-In a BHZ PBC test with `LDMRG=10`, `MDMRG=20`, and four MPI ranks, the
-eligible diagonalizations fell from 50-55 to 30-35 `H*v` products, with
-energies agreeing within `3.2d-14` per site. The contraction forms one local
-site pair at a time to avoid a four-index wavefunction tensor. Peak memory
-and wall-time gain at `MDMRG=500` have not yet been measured.
-
-The predictor forms the projected half states in the previous link ordering,
-then places amplitudes in the current superblock ordering. This distinction
-is needed because PBC alternates `n` and `p` growth, which add the physical
-sites at opposite block edges. The streamed contraction avoids storing a
-dense four-index tensor; its peak memory and wall-time at `MDMRG=500` remain
-to be measured.
+Wave-function prediction and the PRIMME interface are summarized in
+[Milestone 15](#milestone15).
 
 
 
@@ -263,20 +242,20 @@ to be measured.
 This version of the code (5.0.0) includes a complete revision of the memory footprint. 
 Using several input variables we can now control how the results of the calculations are stored in the memory and/or the disk. The relevant variables are:
 
-- `SAVE_BLOCK=T/F`: Logical flag to trigger block storage. DEBUG enforces T. Default: T.
-*This is used to save the block objects to file at each step of the DMRG, which can be used to restart the calculation from that given step. The block files are stored with the name prefix `BLOCK_FILE` plus a suffix.* 
+- `SAVE_BLOCK=T/F`: Logical flag to trigger block storage. DEBUG enforces T. Default: T. 
+  <sup>This is used to save the block objects to file at each step of the DMRG, which can be used to restart the calculation from that given step. The block files are stored with the name prefix `BLOCK_FILE` plus a suffix.</sup> 
 
-- `SAVE_ALL_BLOCKS=T/F`: Logical flag to save all blocks (T) or just the last (F). DEBUG enforces T. Default: F 
-*This is activated to save the blocks at any step to a different file. Mostly for debugging purposes, as it can lead to a large number of files and a large memory footprint.*
+- `SAVE_ALL_BLOCKS=T/F`: Logical flag to save all blocks (T) or just the last (F). DEBUG enforces T. Default: F   
+<sup>This is activated to save the blocks at any step to a different file. Mostly for debugging purposes, as it can lead to a large number of files and a large memory footprint.</sup>
 
 - `BLOCK_UMAT_CACHE=T/F`: Logical flag to keep all rotation matrices in the block memory. Default=F. 
-*This is used to keep (T) or not (F) the rotation matrices in the block memory. While keeping the rotation matrices in memory can speed up the finite DMRG sweeps, it can lead to  memory overflow in large calculations.* 
+<sup>This is used to keep (T) or not (F) the rotation matrices in the block memory. While keeping the rotation matrices in memory can speed up the finite DMRG sweeps, it can lead to  memory overflow in large calculations.</sup> 
 
 - `SAVE_UMAT=T/F`:Logical flag to save rotation matrices to file. Default=T.
-*Rotation matrices are used to measure in DMRG, thus they are stored in the memory or to file according to the value of `BLOCK_UMAT_CACHE`. If `T` the rotation matrices are stored in file with the name prefix `UMAT_FILE` plus a suffix.*
+<sup>Rotation matrices are used to measure in DMRG, thus they are stored in the memory or to file according to the value of `BLOCK_UMAT_CACHE`. If `T` the rotation matrices are stored in file with the name prefix `UMAT_FILE` plus a suffix.</sup>
 
 - `SAVE_MEASURE_STATE=T/F`: Logical flag to save SuperBlock state for post-processing measures. Default=T
-*The superblock calculations results are stored to file with the name prefix `MEASURE_FILE` plus a suffix. This is used to save the SuperBlock state at each step, which can be used to perform measurements in post-processing **without** the need to run the DMRG again. This is particularly useful for large calculations, where the DMRG can be time consuming, while the measurements can be performed in a much faster post-processing step.*
+<sup>The superblock calculations results are stored to file with the name prefix `MEASURE_FILE` plus a suffix. This is used to save the SuperBlock state at each step, which can be used to perform measurements in post-processing **without** the need to run the DMRG again. This is particularly useful for large calculations, where the DMRG can be time consuming, while the measurements can be performed in a much faster post-processing step.</sup>
 
 - `BLOCK_FILE=block`: Name prefix of the stored block file, used to restart DMRG.
 
@@ -288,20 +267,184 @@ Using several input variables we can now control how the results of the calculat
 On top of that this version includes a number of optimizations and bug fixes which removed linear growing of memory footprint with the number of DMRG steps. Larger calculations can now be performed with a reasonable memory footprint, while the restart and checkpointing functionality is now fully working.
 
 
-
 ### <a name="milestone13"></a> Milestone 13
-- [x] Structure factors and polarization/topological marker
 
-`Measure_Structure_DMRG` measures a generic two-operators $A$ and $B$ structure factor $S(q)=\sum_{ij} e^{iq(r_i-r_j)} \langle A_i B_j\rangle$ for a given set of sites, including raw/connected correlations and selected bulk windows.
+- [x] Multi-point static correlation functions, Structure factors and string observables.
+- [x] Restartable post-processing with OBC/PBC-specific structure-factor paths.
 
-`Structure_Factor_DMRG` Discrete Fourier Transforms an existing real or complex correlation matrix. 
+The following table lists every public interface intended for external
+drivers. In the signatures below, brackets denote optional arguments and
+`->` denotes a returned value or an `intent(out)` argument.
 
-`Measure_Polarization_DMRG` computes the complex spin-resolved marker z_sigma, from a single OBC or PBC ground state, using a product of local charge exponentials in the physical basis.
+Notation:  
+`K` = operator key,   
+`O` = `sparse_matrix`,   
+`R` = `real(8)`,  
+`Z` = `complex(8)`,   
+`I` = integer,  
+`L` = logical,    
+`V` = real/complex according to the build.   
 
-`Measure_String_DMRG` and `Measure_Parity_DMRG` measure the spin string and charge parity correlations with selectable endpoints.
 
 
-##### Remarks: 
+##### Measurement session and local observables
+
+The measurement session is initialized with `Init_Measure_DMRG` and released with `End_Measure_DMRG`. If a restart structure is present the session uses the stored rotations, sector maps and ground-state data. 
+
+Main routines:
+| Interface | Inputs | Output |
+|---|---|---|
+| `Init_Measure_DMRG` | `[msg]` | Opens/rebuilds the measurement state |
+| `End_Measure_DMRG` | — | Releases the measurement state |
+| `Measure_DMRG` | `Op` or `Ops(:)`, `[pos(:),file]` | `[avOp(:)]` or `[avOp(:,:)]` |
+| `Measure_Op_DMRG` | `Op,pos` | `R = <Op(pos)>` |
+
+
+A sequence of lower-level calls can be enclosed in `Init_Measure_DMRG` / `End_Measure_DMRG` to reuse the loaded rotations, sector
+maps and ground-state data. High-level interfaces initialize lazily when needed.
+
+`Measure_DMRG` measures one or several local opeators (as sparse matrices) over `pos`. Without `pos` it uses the complete chain. The scalar-operator overload returns `avOp(Npos)`, while the operator-array overload returns `avOp(Noperators,Npos)`. 
+If `file` is present, the same values are appended to
+the suffixed output file. 
+
+
+##### Generic correlations and ordered products
+A number of generic correlation and ordered-product measurements are available. User can pass the `key` of the operator, or the operator itself as a sparse matrix. 
+
+
+The key overloads are preferred: operator matrix, QN shift and fermionic
+grading are read consistently from `LIST_OPERATORS`. In the matrix overload,
+`dqA` and `dqB` follow `O |q> -> |q+dq(O)>`.
+
+`type='fermionic'` marks an odd operator and activates the required
+Jordan--Wigner strings; parity-even operators may use `bosonic`, `psign`, or
+the corresponding stored type. `connected=.true.` subtracts
+`<A(posA)><B(posB)>`. Products preserve the supplied factor order, including
+repeated positions.
+
+
+Products preserve the supplied factor order, including repeated positions. 
+
+The following table lists the public interfaces and their overloads:
+
+
+| Interface | Overload | Signature |
+|---|---|---|
+| `Measure_Corr_DMRG` | keys | `(keyA,keyB,posA,posB,[connected]) -> V` |
+|  | matrices | `(OpA,dqA,OpB,dqB,posA,posB,[typeA,typeB,connected]) -> V` |
+| `Measure_Product_DMRG` | keys | `(keys(:),positions(:)) -> V` |
+|  | matrices | `(Ops(:),dqs(Qdim,M),types(:),positions(:)) -> V` |
+| `Measure_SpinSpin_DMRG` | — | `(posA,posB) -> <S(posA).S(posB)>` |
+| `Measure_DensityDensity_DMRG` | — | `(posA,posB,[connected]) -> V(Nso,Nso)` |
+
+
+
+
+##### Structure factors and nonlocal observables
+Structure factors and nonlocal observables are measured by specific routines, in real or reciprocal space. The following table lists the public interfaces and their overloads:
+
+| Interface | Overload | Required inputs and output |
+|---|---|---|
+| `Measure_Structure_DMRG` | keys | `(keyA,keyB,q(:),Fq(:)->, options)` |
+|  | matrices | `(OpA,dqA,OpB,dqB,q(:),Fq(:)->, options)` |
+| `Measure_Structure_Aq_DMRG` | key | `(key,q(:),Fq(:)->,[positions,connected])` |
+|  | matrix | `(Op,dq,q(:),Fq(:)->,[positions,connected,type])` |
+| `Measure_Polarization_DMRG` | key/matrix | `(key or Op,[positions,x,length]) -> Z` |
+| `Measure_String_DMRG` | — | `(Op,i,j,[theta]) -> Z` |
+| `Measure_Parity_DMRG` | — | `(Op,i,j,[reference,theta]) -> Z` |
+
+Common optional arguments of `Measure_Structure_DMRG` are:
+
+| Option | Type | Meaning |
+|---|---|---|
+| `positions` | `I(:)` | Selected sites; default: complete chain |
+| `connected` | `L` | Subtract one-point contribution |
+| `Cij` | `Z(:,:)` output | Complete matrix; exact mode only |
+| `mode` | character | `exact` (default), `auto`, `bulk`, `periodic`/`pbc` |
+| `same_operator` | `L` | Caller assertion `A=B` |
+| `hermitian` | `L` | Caller assertion `A=A^dagger` |
+| `commuting` | `L` | Caller assertion `[A_i,A_j]=0`, `i/=j` |
+| `rmax` | `I` | Maximum bulk distance |
+| `norigins` | `I` | Origins sampled in bulk/periodic mode |
+| `window_weights` | `L` | Apply `1-|r|/M` in bulk mode |
+| `Cr` | `Z(:)` output | Distance-resolved correlations |
+
+The matrix overload of `Measure_Structure_DMRG` also accepts
+`[typeA:character,typeB:character]`, with the same fermionic-grading convention
+as `Measure_Corr_DMRG`.
+
+`mode='auto'` selects `periodic` only when `PBCdmrg` is true, `positions` is
+the complete ordered ring, every momentum is `q=2*pi*n/M`, and options that
+require the exact pair matrix are absent. It otherwise falls back to `exact`
+and writes the selected route to `LOGfile`. This permits one common OBC/PBC
+post-processing call without silently applying wrapped-distance assumptions to
+an OBC window or to an incomplete PBC selection.
+
+The `Measure_Structure_Aq_DMRG` key overload additionally accepts
+`[positions,connected]`; its matrix overload accepts
+`[positions,connected,type]`. It requires a Hermitian, parity-even,
+QN-conserving local operator and computes `<Aq^dagger Aq>/M` without assuming
+translation invariance.
+
+`Measure_Polarization_DMRG` accepts `[positions:I(:),x:R(:),length:R]`.
+`positions` selects the local factors, `x` supplies their coordinates, and
+`length` is the period used in the phase. `Measure_String_DMRG` defaults to
+`theta=pi`; `Measure_Parity_DMRG` defaults to `reference=2` and `theta=pi`.
+
+##### Energies
+
+| Interface | Signature |
+|---|---|
+| `Measure_FermionBond_DMRG` | `(posA,posB,Hij(:,:)) -> Eij` |
+| `Measure_SpinBond_DMRG` | `(posA,posB,Hij(:,:)) -> Eij` |
+| `Measure_SpinExchangeEnergy_DMRG` | `(Hij(:,:),[Jij->]) -> Espin` |
+| `Measure_LocalEnergy_DMRG` | `([Hi->,H0loc,Hint,Hshift,E0loc->,Eint->,Eshift->]) -> Eloc` |
+| `Measure_Energy_DMRG` | `(Hij,Ebond->,Eloc->,Etotal->,[E0loc->,Eint->,Eshift->,H0loc,Hint,Hshift])` |
+
+For `Measure_LocalEnergy_DMRG` and `Measure_Energy_DMRG`, each optional scalar
+component must be supplied together with its matching operator: `(E0loc,H0loc)`,
+`(Eint,Hint)`, or `(Eshift,Hshift)`. `Hi`, when requested, is a sparse diagonal
+container of site-resolved local energies. `Jij` stores each measured spin-bond
+energy once in its upper triangle.
+
+##### Transforms, advanced propagation primitives, and output
+
+| Interface | Signature |
+|---|---|
+| `Structure_Factor_DMRG` | `(C(:,:),q(:),[x(:)]) -> Fq(:)` |
+| `Correlation_Distance_DMRG` | `(C,positions,r->,Cr->,counts->)` |
+| `Build_Op_DMRG` | `(Op,pos,[set_basis]) -> Oi` |
+| `Advance_Op_DMRG` | `(Op,pos,[nstep]) -> Oi` |
+| `Advance_Corr_DMRG` | `(Op,pos,[nstep]) -> Oi` |
+| `Average_Op_DMRG` | `(Oi,pos) -> <Oi>` |
+| `Write_DMRG` | `(file,val or vals(:)/vals(:,:),[x])` |
+
+`Structure_Factor_DMRG` Fourier-transforms an already available correlation
+matrix and performs no DMRG contractions. `Correlation_Distance_DMRG` groups
+the entries of `C` by absolute physical separation and returns distances,
+averages and pair counts. The Build/Advance/Average routines expose the
+internal operator-propagation stages for advanced code; ordinary analysis
+drivers should normally use `Measure_Op_DMRG`, `Measure_Corr_DMRG`, or the
+structure-factor interfaces. `Write_DMRG` appends the current DMRG suffix to
+`file` and writes scalar, vector or column-oriented matrix data.
+
+
+
+
+###### Structure-factor modes and some examples
+
+`Measure_Structure_DMRG` evaluates
+$S_{AB}(q)=M^{-1}\sum_{ij}e^{iq(r_j-r_i)}\langle A_iB_j\rangle$ on selected
+sites. Choose the path according to the required accuracy and geometry:
+
+| Path | DMRG contractions | Assumption/use |
+|---|---:|---|
+| `mode='exact'` | $M^2$, or $M(M+1)/2$ with symmetry flags | Exact pair sum; optionally returns `Cij` |
+| `mode='bulk'` | approximately `norigins*rmax` | OBC bulk sampling; tests distance homogeneity |
+| `mode='periodic'` | `norigins*M` | Full PBC ring, $q=2\pi n/M$; one origin assumes translation invariance |
+| `mode='auto'` | dispatches above | Uses `periodic` only when its PBC conditions are satisfied; otherwise `exact` |
+| `Measure_Structure_Aq_DMRG` | approximately `Nq*M` block propagations | Exact collective-operator route, no translation assumption |
+
 Existing calls to `Measure_Structure_DMRG` keep the default `mode='exact'` which analyzes all pairs `i` and `j`.
 
 For identical Hermitian operators $A$ $B=A$, that commute on different sites, declare
@@ -345,6 +488,24 @@ A truncated or sampled bulk transform need not be nonnegative, even when the
 exact same-operator structure factor is. PBC Hamiltonians still use physical
 non-wrapping separations here: no periodic distance reduction is inferred.
 
+For a translation-invariant PBC correlator, `mode='periodic'` instead measures
+the wrapped row of the correlation matrix:
+
+```fortran
+call Measure_Structure_DMRG(keyA,keyB,q,Sq,mode='periodic',&
+     same_operator=.true.,hermitian=.true.,commuting=.true.)
+```
+
+It evaluates `F(q)=sum(r=0:M-1) exp(i*q*r)*C(r)`. The default
+`norigins=1` needs only `M` DMRG contractions, independently of the number of
+requested momenta. Increasing `norigins` averages uniformly distributed rows
+around the ring; `norigins=M` is exactly equivalent to the complete pairwise
+sum divided by `M` and does not assume translation invariance. This periodic
+Fourier convention requires the ring momenta `q=2*pi*n/M`; other momenta are
+rejected. Periodic mode also requires `PBCdmrg` and the complete ordered ring
+in `positions` (or no `positions` argument). It rejects `Cij`, `rmax`, and
+`window_weights`; optional `Cr` is returned with bounds `0:M-1`.
+
 ##### Direct structure factors from $A_q$
 
 `Measure_Structure_Aq_DMRG` computes the same finite-selection structure factor
@@ -358,8 +519,14 @@ call Measure_Structure_Aq_DMRG(density, dq0, q, Nq, positions=selected_sites)
 call Measure_Structure_Aq_DMRG('observable_key', q, Fq, connected=.true.)
 ```
 
+The direct route folds momenta related by `q -> q + 2*pi*n` or `q -> -q`
+and performs the DMRG contractions only for the inequivalent values in
+`[0,pi]`.  The returned array still follows the order and length of the input
+`q`.  This is exact for the Hermitian, parity-even local operators accepted by
+this interface and nearly halves the cost of a symmetric `[-pi,pi]` grid.
+
 For M selected sites, $A_q=\sum_j e^{i q R_j}A_j$  and the result is
-$\langle A_q^dagger A_q\rangle/M$. `connected=.true.` subtracts $|\langle A_q\rangle|^2 /M $.
+$\langle A_q^\dagger A_q\rangle/M$. `connected=.true.` subtracts $|\langle A_q\rangle|^2 /M $.
 
 Coordinates are physical site numbers, even for irregular selections or PBC.
 There are no distance cutoffs or window weights: all selected pairs are
@@ -373,7 +540,7 @@ correct quantum-number/parity metadata. The key API checks stored metadata
 on every selected site and also permits site-dependent local matrices.
 QN-changing and parity-odd operators are not supported by this interface.
 
-The implementation accumulates $C=\sum_j \cos(q*R_j)A_j$, 
+The implementation accumulates $C=\sum_j \cos(q R_j)A_j$, 
 $S=\sum_j \sin(qR_j)A_j$, and $T=C.C+S.S$ on each block. $T$ is built before each
 later truncation and rotated independently from C and S. 
 Saved rotation histories and the measurement state allow postprocessing
@@ -421,6 +588,96 @@ Custom bases with missing QN combinations also require the superblock check. Tru
 The old `QNTYPE` and `DMRG_QN` records are removed. Migrate `local` inputs to density `old_DMRG_QN * NORB` with zero offset, and `global` inputs to zero density
 with the previous effective target as offset. Restart formats are unchanged;
 continuation requires matching the old targets. `mainSep25` keeps the old code.
+
+
+### <a name="milestone15"></a> Milestone 15
+
+- [x] Correlated wave-function prediction for OBC/PBC iDMRG.
+- [x] Serial and distributed PRIMME interfaces with block initial guesses.
+- [x] Optional Ritz-residual validation and eigensolver diagnostics.
+
+#### Sparse eigensolvers
+
+`LANC_METHOD` selects the iterative solver used when the superblock is above
+`LANC_DIM_THRESHOLD`. Small sectors still use dense LAPACK automatically.
+
+| Capability | `LANC_METHOD='arpack'` | `LANC_METHOD='primme'` |
+|---|---|---|
+| Default | Yes | No |
+| Serial callback | scalar `H*v` | block `H*V` adapter |
+| MPI callback | distributed PARPACK-style vector | distributed PRIMME MatMat |
+| Predicted initial state | one vector | orthonormal block |
+| Prediction with `LANC_NEIGEN>1` | disabled by input validation | supported |
+| Returned diagnostics | `NumOp` | `NumOp`, iterations, converged states, exit status |
+| Failure handling | solver error | nonzero PRIMME status is reduced across ranks and is fatal |
+
+The PRIMME path uses `PRIMME_DEFAULT_MIN_MATVECS` through SciFortran and
+supports real/complex, serial/MPI builds. The existing superblock `H*v`
+kernels remain the source of the matrix action; the PRIMME adapters only expose
+the required block callback and do not assemble a new Hamiltonian. PRIMME
+returns iteration/convergence/status counters to `sb_diag`; a nonzero exit
+status is logged together with the number of converged states.
+
+| Input | Default | Meaning |
+|---|---:|---|
+| `LANC_METHOD` | `arpack` | `arpack` or `primme` |
+| `LANC_NEIGEN` | `2` | Requested eigenstates per superblock sector |
+| `LANC_TOLERANCE` | `1d-10` | Relative iterative-solver tolerance |
+| `LANC_NITER` | `512` | Maximum iterative-solver steps |
+| `LANC_NCV_FACTOR` | `10` | ARPACK/solver search-space factor |
+| `LANC_NCV_ADD` | `0` | Additive search-space size |
+| `LANC_CHECK_RESIDUAL` | `F` | Evaluate `||H psi_i-E_i psi_i||` after the solve |
+| `LANC_TARGET_PREDICTION` | `F` | Enable correlated iDMRG initial guesses |
+
+`LANC_CHECK_RESIDUAL=T` adds one extra Hamiltonian application per returned
+state and reports the absolute Ritz residual. It is intended for validation;
+`GS_DEG_THRESHOLD` remains an independent absolute energy threshold used to
+select the ground-state manifold for the density matrix.
+
+#### Correlated wave-function prediction
+
+`LANC_TARGET_PREDICTION=T` is available for **iDMRG only**, with either OBC or
+PBC. The first growth steps use the solver's ordinary initialization until the
+previous center wavefunctions and left/right truncation isometries are
+available. Later steps:
+
+1. project the previous target states through the new left/right isometries;
+2. join the two half states through an SVD pseudoinverse of the previous center;
+3. stream one local-site pair at a time into the current superblock ordering;
+4. orthonormalize the valid target columns before passing them to PRIMME.
+
+PBC prediction explicitly follows the alternating `n`/`p` link ordering,
+which inserts physical sites at opposite block edges. The streamed contraction
+avoids a dense four-index wavefunction tensor. Rank zero constructs the trial
+block; MPI runs scatter each valid column to the normal distributed
+superblock-vector layout. If an MPI sector requires the serial empty-row
+fallback, PRIMME can still receive the complete root-owned prediction block;
+ARPACK retains its unseeded fallback there.
+
+ARPACK accepts a predicted state only for `LANC_NEIGEN=1`; input parsing logs
+the incompatibility and disables prediction otherwise. PRIMME accepts up to
+`LANC_NEIGEN` independent predicted columns. Prediction is not currently
+enabled for finite-DMRG sweeps.
+
+```text
+LANC_METHOD=primme
+LANC_NEIGEN=2
+LANC_TARGET_PREDICTION=T
+LANC_TOLERANCE=1d-10
+LANC_CHECK_RESIDUAL=T
+```
+
+Reference BHZ tests reported the following solver-level reductions while
+preserving the converged energy within the quoted numerical precision:
+
+| Geometry | Setup | `H*v` without/with prediction | Energy agreement |
+|---|---|---:|---:|
+| OBC | one target, `LANC_TOLERANCE=1d-10` | `150 -> 60` on eligible steps | `2e-14` per site |
+| PBC | `LDMRG=10`, `MDMRG=20`, 4 MPI ranks | `50-55 -> 30-35` | `3.2e-14` per site |
+
+These are small reference cases, not general performance guarantees. Peak
+memory and wall-time scaling for large retained-state spaces, especially
+around `MDMRG=500`, still require production benchmarking.
 
 
 
