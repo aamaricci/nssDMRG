@@ -743,12 +743,12 @@ contains
 #ifdef _CMPLX
     complex(8),intent(in)                   :: V(:,:)
     complex(8),intent(out)                  :: Hv(:,:)
-    complex(8),allocatable                  :: vt(:),Hvt(:)
+    complex(8),allocatable                  :: vt(:),vout(:),Hvt(:)
     complex(8)                              :: val
 #else
     real(8),intent(in)                      :: V(:,:)
     real(8),intent(out)                     :: Hv(:,:)
-    real(8),allocatable                     :: vt(:),Hvt(:)
+    real(8),allocatable                     :: vt(:),vout(:),Hvt(:)
     real(8)                                 :: val
 #endif
     type(sparse_matrix)                     :: Hlk,Hrk,Aop,Bop
@@ -796,6 +796,8 @@ contains
        !
        Hlk=filter_left_operator(Lazy_Hl,k,k)
        allocate(vt(mpiDrs(k)*Dls(k)),Hvt(mpiDrs(k)*Dls(k)))
+       ! The input and output transpose layouts have independent extents.
+       allocate(vout(Drs(k)*mpiDls(k)))
        i_start=1+mpiOffset(k)
        i_end=Drs(k)*mpiDls(k)+mpiOffset(k)
        do iv=1,Nvec
@@ -818,14 +820,14 @@ contains
              enddo
           enddo
           if(hxv_detail_active)t_hxv_local=t_hxv_local+t_stop()
-          vt=zero
+          vout=zero
           if(hxv_detail_active)t0=t_start()
           call vector_transpose_MPI(Dls(k),mpiDrs(k),Hvt,Drs(k), &
-               mpiDls(k),vt,mpiSBCOMM(k))
+               mpiDls(k),vout,mpiSBCOMM(k))
           if(hxv_detail_active)t_hxv_mpi=t_hxv_mpi+t_stop()
-          Hv(i_start:i_end,iv)=Hv(i_start:i_end,iv)+vt
+          Hv(i_start:i_end,iv)=Hv(i_start:i_end,iv)+vout
        enddo
-       deallocate(vt,Hvt)
+       deallocate(vt,vout,Hvt)
        call Hlk%free()
        !
        qn=sb_sector%qn(index=k)
