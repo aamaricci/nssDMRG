@@ -184,7 +184,7 @@ contains
   !              INFINITE DMRG ALGORITHM
   !##################################################################
   subroutine infinite_DMRG()
-    logical :: bool_left,bool_right
+    character(len=1) :: ilink
     !
 #ifdef _DEBUG
     write(LOGfile,*)"DEBUG: Infinite Algorithm"
@@ -198,9 +198,19 @@ contains
     call right%load(str(suffix_dmrg('right')//".restart"))
     if(left%length/=right%length)stop "infinite_DMRG error: L.length != R.length"
     !
+    ! Note that checkpoints contain the blocks BEFORE an enlargement. In
+    ! PBC an even block length therefore resumes with p, an odd length
+    ! resumes with n. Check the target after each enlargement, including
+    ! a resumed half-pair. 
+    !
+    ! Here we use alternated steps (n,p,n,p) to
+    ! reach the target length in PBC
+    !'n'= [o-o...o-]-*.*-[-o...o-o] OBC=PBC_next
+    !'p'= @-[-o...o-o].[o-o...o-]-@     PBC_prev
     do while (left%length < Ldmrg)
-       call step_dmrg('i',link='n')            ![o-o...o-]-*.*-[-o...o-o] OBC=PBC_next
-       if(PBCdmrg)call step_dmrg('i',link='p') !@-[-o...o-o].[o-o...o-]-@     PBC_prev
+       ilink='n'
+       if(PBCdmrg.and.mod(left%length,2)==0)ilink='p'
+       call step_dmrg('i',link=ilink)
     enddo
   end subroutine infinite_DMRG
 
