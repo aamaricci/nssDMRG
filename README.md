@@ -267,6 +267,28 @@ Using several input variables we can now control how the results of the calculat
 On top of that this version includes a number of optimizations and bug fixes which removed linear growing of memory footprint with the number of DMRG steps. Larger calculations can now be performed with a reasonable memory footprint, while the restart and checkpointing functionality is now fully working.
 
 
+### Site-dependent geometry
+
+`init_dmrg(Hij,ModelDot)` accepts three site layouts:
+
+- `size(ModelDot)=1` describes a homogeneous chain and replicates the site;
+- `size(ModelDot)=fNlat` describes an iDMRG chain in physical position order;
+- `size(ModelDot)=iNlat` retains the historical expert interface in explicit
+  growth order.
+
+For the physical layout, `DMRG_GEOMETRY` maps the chain positions to the
+left/right pairs consumed by symmetric growth. OBC grows from the two ends.
+PBC grows each odd-length block from its center and alternates the two sides.
+The same block map is used by `DMRG_MEASURE`, so local matrices and operator
+keys remain indexed by physical position even when local dimensions differ.
+
+The fixed-impurity example under `drivers/Kondo1d` uses a four-state electron
+site everywhere except for one eight-state Kondo site. The impurity occupies
+the initial left PBC seed. Moving it to a later growth step would require a
+composition-dependent target-QN schedule and is deliberately rejected by the
+vanilla driver.
+
+
 ### <a name="milestone13"></a> Milestone 13
 
 - [x] Multi-point static correlation functions, Structure factors and string observables.

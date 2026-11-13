@@ -23,12 +23,16 @@ FOCK=../FOCK
 LIST=../LIST
 MATRIX=../MATRIX
 
-test: hlocal 
+test: hlocal kondo_local
 
 
 hlocal: MYOBJ=VERSION.o INPUT_VARS.o AUX_FUNCS.o
 hlocal: VERSION.o INPUT_VARS.o AUX_FUNCS.o
 	${FC} $(FLAG) -D_TEST $(MYOBJ) HLOCAL.f90 -o $(HOME)/.bin/testHLOCAL ${SF_INC} ${SF_LIB}
+
+
+kondo_local:
+	${FC} $(FLAG) -D_TEST KONDO_LOCAL.f90 -o $(HOME)/.bin/testKONDO_LOCAL ${SF_INC} ${SF_LIB}
 
 
 VERSION.o:

@@ -96,6 +96,7 @@ MODULE DMRG_GLOBAL
   !GLOBAL LEFT & RIGHT & DOT 
   type(block)                                    :: left,right
   type(site),dimension(:),allocatable            :: dot
+  integer,dimension(:),allocatable               :: dot_growth_map
   !
   !SUPERBLOCK SHARED THINGS
   integer,dimension(:),allocatable               :: sb_states

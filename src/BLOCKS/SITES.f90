@@ -7,6 +7,7 @@ MODULE SITES
   USE LIST_OPERATORS
   USE LIST_SECTORS
   USE HLOCAL
+  USE KONDO_LOCAL
 #ifdef _MPI
   USE SCIFOR,only: check_MPI,get_master_MPI   
 #endif  
@@ -49,6 +50,7 @@ MODULE SITES
   !TEMPLATES:
   public :: spin_site
   public :: electron_site
+  public :: kondo_fixed_site
 
 
 contains
@@ -472,6 +474,106 @@ logical                                   :: master=.true.
     call Delete_LocalFock_Space()
     !
   end function electron_site
+
+
+
+
+  !##################################################################
+  !##################################################################
+  !        FIXED KONDO IMPURITY = ELECTRON x LOCAL SPIN-1/2
+  !##################################################################
+  !##################################################################
+  ! Build an eight-state fermionic site containing one conduction orbital
+  ! and one permanently occupied spin-1/2 impurity.  Jz and Jxy are the
+  ! longitudinal and transverse Kondo couplings; optional Vk multiplies the
+  ! conduction density and defaults to zero.  The constructor is available
+  ! only for Nspin=2, Norb=1, DMRG_MODE='normal' and QNDIM=2.
+  !
+  ! The site registers the same boundary keys as electron_site: H, the two
+  ! annihilation operators C, and the fermionic sign P, including previous
+  ! link copies for PBC.  The optional sparse outputs return local operators
+  ! for measurements and are not inserted in the propagated operator list.
+  ! Invalid model dimensions or symmetry settings terminate with error stop.
+  function kondo_fixed_site(Jz,Jxy,Vk,Simp_z,Simp_p,Sele_z,Sele_p,Nimp_op) result(self)
+    real(8),intent(in)                        :: Jz,Jxy
+    real(8),intent(in),optional               :: Vk
+    type(sparse_matrix),intent(out),optional  :: Simp_z,Simp_p
+    type(sparse_matrix),intent(out),optional  :: Sele_z,Sele_p
+    type(sparse_matrix),intent(out),optional  :: Nimp_op
+    type(site)                                :: self
+#ifdef _CMPLX
+    complex(8),dimension(:,:),allocatable     :: H,C,P
+    complex(8),dimension(:,:),allocatable     :: Si_z,Si_p,Se_z,Se_p,Nimp
+#else
+    real(8),dimension(:,:),allocatable        :: H,C,P
+    real(8),dimension(:,:),allocatable        :: Si_z,Si_p,Se_z,Se_p,Nimp
+#endif
+    integer,dimension(:),allocatable          :: Basis
+    integer                                   :: ispin
+    real(8)                                   :: Vk_
+    real(8),dimension(2)                      :: dq0,dqC
+    character(len=:),allocatable              :: key
+    !
+    ! Validate the local model and symmetry contract.
+    if(Nspin/=2)error stop 'kondo_fixed_site: Nspin must be 2'
+    if(Norb/=1)error stop 'kondo_fixed_site: Norb must be 1'
+    if(to_lower(trim(dmrg_mode))/='normal')&
+         error stop "kondo_fixed_site: DMRG_MODE must be 'normal'"
+    if(QNdim/=2)error stop 'kondo_fixed_site: QNDIM must be 2'
+    !
+    Vk_=0d0
+    if(present(Vk))Vk_=Vk
+    !
+    ! Build the local Hamiltonian and measurement operators.
+    H    =Build_KondoFixed_Hamiltonian(Jz,Jxy,Vk_)
+    P    =Build_KondoFixed_Parity()
+    Si_z =Build_KondoFixed_ImpuritySpin('z')
+    Si_p =Build_KondoFixed_ImpuritySpin('+')
+    Se_z =Build_KondoFixed_ElectronSpin('z')
+    Se_p =Build_KondoFixed_ElectronSpin('+')
+    Nimp =Build_KondoFixed_Number()
+    Basis=Build_KondoFixed_BasisQN()
+    !
+    ! Initialize the site and register the common fermionic boundary schema.
+    call self%free()
+    self%SiteType='FERMION'
+    self%OpName='C'
+    self%Dim=size(H,1)
+    dq0=0d0
+    call self%put('H',sparse(H),'bosonic',dq=dq0)
+    do ispin=1,Nspin
+       C=Build_KondoFixed_C(ispin)
+       dqC=0d0
+       dqC(ispin)=-1d0
+       key=self%OpName//self%okey(1,ispin,ilink='n')
+       call self%put(key,sparse(C),'fermionic',dq=dqC)
+    enddo
+    key='P'//self%okey(0,0,ilink='n')
+    call self%put(key,sparse(P),'psign',dq=dq0)
+    if(PBCdmrg)then
+       do ispin=1,Nspin
+          C=Build_KondoFixed_C(ispin)
+          dqC=0d0
+          dqC(ispin)=-1d0
+          key=self%OpName//self%okey(1,ispin,ilink='p')
+          call self%put(key,sparse(C),'fermionic',dq=dqC)
+       enddo
+       key='P'//self%okey(0,0,ilink='p')
+       call self%put(key,sparse(P),'psign',dq=dq0)
+    endif
+    !
+    ! Store total (N_up,N_down), including the localized spin.
+    allocate(self%sectors(1))
+    self%sectors(1)=sectors_list(tbasis(Basis,Qdim=2))
+    !
+    ! Return unregistered local observables on request.
+    if(present(Simp_z)) Simp_z =sparse(Si_z)
+    if(present(Simp_p)) Simp_p =sparse(Si_p)
+    if(present(Sele_z)) Sele_z =sparse(Se_z)
+    if(present(Sele_p)) Sele_p =sparse(Se_p)
+    if(present(Nimp_op))Nimp_op=sparse(Nimp)
+    !
+  end function kondo_fixed_site
 
 
 

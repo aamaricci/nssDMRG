@@ -1,5 +1,6 @@
 module DMRG_MEASURE
   USE DMRG_GLOBAL
+  USE DMRG_GEOMETRY
   USE DMRG_CONNECT
   USE DMRG_SUPERBLOCK
   implicit none
@@ -1146,7 +1147,7 @@ contains
     real(8),dimension(:),allocatable :: qn
     character(len=*),optional        :: msg
     integer,dimension(2)             :: omat_dims
-    integer                          :: ilat,i,f,m,istate,mpi_error,map_length
+    integer                          :: ilat,i,istate,mpi_error,map_length
     logical                          :: found_measure_state
     logical                          :: need_measure_state
     character(len=:),allocatable     :: default_suffix,current_suffix
@@ -1239,20 +1240,7 @@ contains
     ! Final enlarged blocks can exceed the input Ldmrg after finite sweeps.
     ! Map their actual lengths, including when loading a measurement checkpoint.
     map_length=max(left%length,right%length)
-    allocate(b2gMap(map_length))
-    if(PBCdmrg)then
-      !The symmetric PBC blocks have odd length, map_length = 2*m+1
-      f = (map_length+1)/2          !mid-point
-      m = (map_length-1)/2
-      !
-      b2gMap(f) = 1
-      do i=1,m
-        b2gMap(f+i)  = 2*i
-        b2gMap(f-i)  = 2*i+1
-      enddo
-    else
-      b2gMap = (/(i,i=1,map_length)/)
-    endif
+    b2gMap=Build_Block_Growth_Map(map_length,PBCdmrg)
   end subroutine Init_Measure_dmrg
 
 
@@ -3138,12 +3126,12 @@ contains
         call Urotate()
         if(PBCdmrg)then
           if(mod(it,2)==0)then
-            Oi = Id(dot(it)%dim).x.Oi
+            Oi = Id(dot(dot_growth_map(2*(it+1)-1))%dim).x.Oi
           else
-            Oi = Oi.x.Id(dot(it)%dim)
+            Oi = Oi.x.Id(dot(dot_growth_map(2*(it+1)-1))%dim)
           endif
         else
-          Oi = Oi.x.Id(dot(it)%dim)
+          Oi = Oi.x.Id(dot(dot_growth_map(2*(it+1)-1))%dim)
         endif
       enddo
      case ("r")
@@ -3152,12 +3140,12 @@ contains
         call Urotate()
         if(PBCdmrg)then
           if(mod(it,2)==0)then
-            Oi = Oi.x.Id(dot(it)%dim)
+            Oi = Oi.x.Id(dot(dot_growth_map(2*(it+1)))%dim)
           else
-            Oi = Id(dot(it)%dim).x.Oi
+            Oi = Id(dot(dot_growth_map(2*(it+1)))%dim).x.Oi
           endif
         else
-          Oi = Id(dot(it)%dim).x.Oi
+          Oi = Id(dot(dot_growth_map(2*(it+1)))%dim).x.Oi
         endif
       enddo
     end select
@@ -3242,12 +3230,12 @@ contains
         call Urotate
         if(PBCdmrg)then
           if(mod(it,2)==0)then
-            Oi = Id(dot(it)%dim).x.Oi
+            Oi = Id(dot(dot_growth_map(2*(it+1)-1))%dim).x.Oi
           else
-            Oi = Oi.x.Id(dot(it)%dim)
+            Oi = Oi.x.Id(dot(dot_growth_map(2*(it+1)-1))%dim)
           endif
         else
-          Oi = Oi.x.Id(dot(it)%dim)
+          Oi = Oi.x.Id(dot(dot_growth_map(2*(it+1)-1))%dim)
         endif
       enddo
      case ("r")
@@ -3256,12 +3244,12 @@ contains
         call Urotate()
         if(PBCdmrg)then
           if(mod(it,2)==0)then
-            Oi = Oi.x.Id(dot(it)%dim)
+            Oi = Oi.x.Id(dot(dot_growth_map(2*(it+1)))%dim)
           else
-            Oi = Id(dot(it)%dim).x.Oi
+            Oi = Id(dot(dot_growth_map(2*(it+1)))%dim).x.Oi
           endif
         else
-          Oi = Id(dot(it)%dim).x.Oi
+          Oi = Id(dot(dot_growth_map(2*(it+1)))%dim).x.Oi
         endif
       enddo
     end select

@@ -1,5 +1,6 @@
 MODULE DMRG_MAIN
   USE DMRG_GLOBAL
+  USE DMRG_GEOMETRY
   USE DMRG_CONNECT
   USE DMRG_SUPERBLOCK
   USE DMRG_RDM
@@ -19,6 +20,16 @@ contains
   !##################################################################
   !              INIT DMRG ALGORITHM
   !##################################################################
+  ! Initialize the DMRG Hamiltonian, local-site geometry and target QNs.
+  ! Hij is the replicated nearest-neighbour coupling matrix with shape
+  ! [Nspin*Norb,Nspin*Norb]. ModelDot may contain one homogeneous site,
+  ! fNlat sites in physical chain order for iDMRG, or iNlat sites in the
+  ! historical explicit growth order. The physical layout is converted to
+  ! symmetric left/right growth pairs by DMRG_GEOMETRY while dot remains in
+  ! physical order for measurements. All ranks receive replicated inputs;
+  ! MPI communicator setup is performed internally when MPI is active.
+  ! Invalid matrix shapes, site counts, local QN metadata or unsupported
+  ! finite-DMRG physical layouts terminate before numerical work begins.
   subroutine init_dmrg(Hij,ModelDot)
 #ifdef _CMPLX
     complex(8),dimension(:,:)   :: Hij
@@ -26,7 +37,7 @@ contains
     real(8),dimension(:,:)      :: Hij
 #endif
     type(site),dimension(:)     :: ModelDot
-    integer                     :: ilat,i,f,m
+    integer                     :: ilat
     !
     !
 #ifdef _MPI
@@ -44,18 +55,36 @@ contains
     call assert_shape(Hij,[Nspin*Norb,Nspin*Norb],"Init_DMRG","Hij")
     allocate(HopH, source=Hij)
     !
-    !SETUP the Dots: this is unsatisfactory
+    ! Keep dot in physical chain order for measurement APIs and store the
+    ! independent physical position selected at each symmetric growth step.
     allocate(dot(iNlat))
+    allocate(dot_growth_map(fNlat))
     select case(size(ModelDot))
     case (1)
        do ilat=1,iNlat
           dot(ilat) = ModelDot(1)
        enddo
+       dot_growth_map=Build_DMRG_Growth_Map(fNlat,PBCdmrg)
     case default
-       if(size(ModelDot)/=iNlat)stop "Init_DMRG ERROR: size(ModelDot) != 2*Ldmrg+2 or 1"
-       do ilat=1,iNlat
-          dot(ilat) = ModelDot(ilat)
-       enddo
+       if(size(ModelDot)==fNlat)then
+          if(to_lower(DMRGtype)/='i')&
+               error stop 'Init_DMRG: physical ModelDot currently requires iDMRG'
+          do ilat=1,fNlat
+             dot(ilat)=ModelDot(ilat)
+          enddo
+          dot(fNlat+1)=dot(fNlat-1)
+          dot(fNlat+2)=dot(fNlat)
+          dot_growth_map=Build_DMRG_Growth_Map(fNlat,PBCdmrg)
+       elseif(size(ModelDot)==iNlat)then
+          do ilat=1,iNlat
+             dot(ilat)=ModelDot(ilat)
+          enddo
+          ! Backwards-compatible expert input: ModelDot is already in growth
+          ! order and cannot provide physical site metadata for measurements.
+          dot_growth_map=[(ilat,ilat=1,fNlat)]
+       else
+          error stop 'Init_DMRG: ModelDot size must be 1, fNlat (physical), or iNlat (growth order)'
+       endif
     end select
     !
     !Validate the physical QN metadata before constructing any block.
@@ -63,8 +92,8 @@ contains
     !
     !SETUP the initial DMRG structure
     call setup_target_qn()
-    init_left   = block(dot(1))
-    init_right  = block(dot(1))
+    init_left   = block(dot(dot_growth_map(1)))
+    init_right  = block(dot(dot_growth_map(2)))
     !
     call reset_profile()
     !
@@ -114,6 +143,7 @@ contains
        call dot(ilat)%free()
     enddo
     deallocate(dot)
+    if(allocated(dot_growth_map))deallocate(dot_growth_map)
     call init_left%free()
     call init_right%free()
     call left%free()
@@ -381,8 +411,10 @@ contains
     !#################################
     Lleft =left%length
     Lright=right%length
-    call enlarge_block(left,dot(left%length+1),label='left',link=iLink)
-    call enlarge_block(right,dot(left%length+2),label='right',link=iLink)
+    call enlarge_block(left,dot(dot_growth_map(2*Lleft+1)),&
+         label='left',link=iLink)
+    call enlarge_block(right,dot(dot_growth_map(2*Lleft+2)),&
+         label='right',link=iLink)
     !
     !#################################
     !    Build SUPER-BLOCK Sector

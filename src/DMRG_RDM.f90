@@ -241,6 +241,7 @@ contains
     real(8)                          :: e_,err
     real(8),dimension(:),allocatable :: qn
     integer                          :: i,j,r,l,im,unit
+    logical                          :: keep_full_basis
     type(tbasis)                     :: left_basis,right_basis
     type(sparse_matrix)              :: trRho_left,trRho_right
     !
@@ -258,34 +259,44 @@ contains
     select case(to_lower(str(label(1:1))))
     case ("l","s")!!!!!      LEFT
        mtr = m_left
+       keep_full_basis=Mstates>0.and.Mstates>=m_left
        if(left%length+right%length==2)return
        !
        if(MpiMaster)then
           !Build Truncated Density Matrices:
           call start_timer("Renormalize "//to_lower(str(label)));t0=t_start()
-          m_max = min(m_left,size(rho_left_evals))
-          if(Estates>0d0)then
-             m_err = minloc(abs(1d0-cumulate(rho_left_evals)-Estates))
-             m_s   = min(m_err(1),m_max)
-             if(Mstates>0.and.m_s>Mstates)then
-                if(MpiMaster)write(LOGfile,*)"renormalize_block WARNING: Mdmrg caps Edmrg left states from",m_s,"to",Mstates
-                m_s = Mstates
-             endif
-          elseif(Mstates>0)then
-             m_s   = min(Mstates,m_max)
+          ! Preserve every QN sector while the complete enlarged-block basis
+          ! fits below Mstates.  Zero-weight sectors for the current target
+          ! can become active when an affine target changes at the next step.
+          if(keep_full_basis)then
+             m_s                   = m_left
+             truncation_error_left = 0d0
+             trRho_left            = id(m_left)
           else
-             stop "Mdmrg=Edmrg=0 can not fix a threshold for the RDM"
+             m_max = min(m_left,size(rho_left_evals))
+             if(Estates>0d0)then
+                m_err = minloc(abs(1d0-cumulate(rho_left_evals)-Estates))
+                m_s   = min(m_err(1),m_max)
+                if(Mstates>0.and.m_s>Mstates)then
+                   if(MpiMaster)write(LOGfile,*)"renormalize_block WARNING: Mdmrg caps Edmrg left states from",m_s,"to",Mstates
+                   m_s = Mstates
+                endif
+             elseif(Mstates>0)then
+                m_s   = min(Mstates,m_max)
+             else
+                stop "Mdmrg=Edmrg=0 can not fix a threshold for the RDM"
+             endif
+             !
+             e_=rho_left_evals(m_s)
+             j_=m_s
+             do i=j_+1,size(rho_left_evals)
+                err = abs(e_-rho_left_evals(i))/e_
+                if(err<=deg_evals_threshold.and.m_s<m_max)m_s=m_s+1
+             enddo
+             !>truncation-rotation matrices:
+             truncation_error_left = 1d0 - sum(rho_left_evals(1:m_s))
+             trRho_left            = rho_left%sparse(m_left,m_s)
           endif
-          !
-          e_=rho_left_evals(m_s)
-          j_=m_s
-          do i=j_+1,size(rho_left_evals)
-             err = abs(e_-rho_left_evals(i))/e_
-             if(err<=deg_evals_threshold.and.m_s<m_max)m_s=m_s+1
-          enddo
-          !>truncation-rotation matrices:
-          truncation_error_left  = 1d0 - sum(rho_left_evals(1:m_s))
-          trRho_left             = rho_left%sparse(m_left,m_s)
           if(lanc_target_prediction.and.allocated(wf_old_psi))then
              if(allocated(wf_ul))deallocate(wf_ul)
              wf_ul=trRho_left%as_matrix()
@@ -296,6 +307,7 @@ contains
                suffix_dmrg('left')//".restart",append=(left%length/=2),gzip=.false.)
        endif
 #ifdef _MPI
+       if(MpiStatus)call Bcast_MPI(MpiComm,keep_full_basis)
        if(MpiStatus)call Bcast_MPI(MpiComm,m_s)
        if(MpiStatus)call trRho_left%bcast()
 #endif       
@@ -309,14 +321,16 @@ contains
        !
        !
        !>Prepare output and update basis state
-       do im=1,m_s
-          if(MpiMaster)qn = rho_left%qn(m=im)
+       if(.not.keep_full_basis)then
+          do im=1,m_s
+             if(MpiMaster)qn = rho_left%qn(m=im)
 #ifdef _MPI
-          if(MpiStatus)call Bcast_Mpi(MpiComm,qn)
+             if(MpiStatus)call Bcast_Mpi(MpiComm,qn)
 #endif
-          call left_basis%append( qn=qn )
-       enddo
-       call left%set_basis(basis=left_basis)
+             call left_basis%append(qn=qn)
+          enddo
+          call left%set_basis(basis=left_basis)
+       endif
        !
        Mtr = m_s
        !
@@ -337,34 +351,44 @@ contains
        !
     case ("r","e")!!!!!      RIGHT
        mtr  = m_right
+       keep_full_basis=Mstates>0.and.Mstates>=m_right
        if(left%length+right%length==2)return
        !
        if(MpiMaster)then
           !Build Truncated Density Matrices:
           call start_timer("Renormalize "//to_lower(str(label)));t0=t_start()
-          m_max = min(m_right,size(rho_right_evals))
-          if(Estates>0d0)then
-             m_err = minloc(abs(1d0-cumulate(rho_right_evals)-Estates))
-             m_e   = min(m_err(1),m_max)
-             if(Mstates>0.and.m_e>Mstates)then
-                if(MpiMaster)write(LOGfile,*)"renormalize_block WARNING: Mdmrg caps Edmrg right states from",m_e,"to",Mstates
-                m_e = Mstates
-             endif
-          elseif(Mstates>0)then
-             m_e   = min(Mstates,m_max)
+          ! Preserve every QN sector while the complete enlarged-block basis
+          ! fits below Mstates.  Zero-weight sectors for the current target
+          ! can become active when an affine target changes at the next step.
+          if(keep_full_basis)then
+             m_e                    = m_right
+             truncation_error_right = 0d0
+             trRho_right            = id(m_right)
           else
-             stop "Mdmrg=Edmrg=0 can not fix a threshold for the RDM"
+             m_max = min(m_right,size(rho_right_evals))
+             if(Estates>0d0)then
+                m_err = minloc(abs(1d0-cumulate(rho_right_evals)-Estates))
+                m_e   = min(m_err(1),m_max)
+                if(Mstates>0.and.m_e>Mstates)then
+                   if(MpiMaster)write(LOGfile,*)"renormalize_block WARNING: Mdmrg caps Edmrg right states from",m_e,"to",Mstates
+                   m_e = Mstates
+                endif
+             elseif(Mstates>0)then
+                m_e   = min(Mstates,m_max)
+             else
+                stop "Mdmrg=Edmrg=0 can not fix a threshold for the RDM"
+             endif
+             !
+             e_=rho_right_evals(m_e)
+             j_=m_e
+             do i=j_+1,size(rho_right_evals)
+                err = abs(e_-rho_right_evals(i))/e_
+                if(err<=deg_evals_threshold.and.m_e<m_max)m_e=m_e+1
+             enddo
+             !>truncation-rotation matrices:
+             truncation_error_right = 1d0 - sum(rho_right_evals(1:m_e))
+             trRho_right            = rho_right%sparse(m_right,m_e)
           endif
-          !
-          e_=rho_right_evals(m_e)
-          j_=m_e
-          do i=j_+1,size(rho_right_evals)
-             err = abs(e_-rho_right_evals(i))/e_
-             if(err<=deg_evals_threshold.and.m_e<m_max)m_e=m_e+1
-          enddo
-          !>truncation-rotation matrices:
-          truncation_error_right = 1d0 - sum(rho_right_evals(1:m_e))
-          trRho_right            = rho_right%sparse(m_right,m_e)
           if(lanc_target_prediction.and.allocated(wf_old_psi))then
              if(allocated(wf_ur))deallocate(wf_ur)
              wf_ur=trRho_right%as_matrix()
@@ -375,6 +399,7 @@ contains
                suffix_dmrg('right')//".restart",append=(right%length/=2),gzip=.false.)
        endif
 #ifdef _MPI
+       if(MpiStatus)call Bcast_MPI(MpiComm,keep_full_basis)
        if(MpiStatus)call Bcast_MPI(MpiComm,m_e)
        if(MpiStatus)call trRho_right%bcast()
 #endif
@@ -388,14 +413,16 @@ contains
        !
        !
        !>Prepare output and update basis state
-       do im=1,m_e
-          if(MpiMaster)qn = rho_right%qn(m=im)
+       if(.not.keep_full_basis)then
+          do im=1,m_e
+             if(MpiMaster)qn = rho_right%qn(m=im)
 #ifdef _MPI
-          if(MpiStatus)call Bcast_Mpi(MpiComm,qn)
+             if(MpiStatus)call Bcast_Mpi(MpiComm,qn)
 #endif
-          call right_basis%append( qn=qn )
-       enddo
-       call right%set_basis(basis=right_basis)
+             call right_basis%append(qn=qn)
+          enddo
+          call right%set_basis(basis=right_basis)
+       endif
        !
        Mtr = m_e
        !
