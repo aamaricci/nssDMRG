@@ -1,4 +1,5 @@
 MODULE DMRG_GLOBAL
+  USE, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   USE SF_TIMER
   USE SF_FONTS
   USE SF_MISC
@@ -67,6 +68,7 @@ MODULE DMRG_GLOBAL
   real(8)                                        :: truncation_error_left,truncation_error_right
   character(len=:),allocatable                   :: suffix
   real(8),dimension(:),allocatable               :: target_density,target_offset,current_target_QN
+  real(8),dimension(:,:),allocatable             :: target_qn_schedule
   real(8),dimension(:),allocatable               :: target_site_min,target_site_max
   logical                                        :: target_uniform_bounds
   integer                                        :: current_L
@@ -275,6 +277,18 @@ contains
     !
     allocate(target_density, source=QN_density)
     allocate(target_offset, source=QN_offset)
+    !Validate the explicit API before any early return from the physical-bounds
+    !analysis below.  The table is indexed directly by superblock length.
+    if(allocated(target_qn_schedule))then
+       if(to_lower(DMRGtype)/="i")&
+            error stop "init_dmrg ERROR: TargetQNs currently requires iDMRG"
+       if(size(target_qn_schedule,1)/=size(target_density))&
+            error stop "init_dmrg ERROR: TargetQNs first dimension must equal QNDIM"
+       if(size(target_qn_schedule,2)/=fNlat)&
+            error stop "init_dmrg ERROR: TargetQNs second dimension must equal fNlat"
+       if(.not.all(ieee_is_finite(target_qn_schedule)))&
+            error stop "init_dmrg ERROR: TargetQNs contains a non-finite value"
+    endif
     !Find the smallest and largest QN allowed on each site.
     !Use all states of the original local basis, before DMRG truncation.
     !Examples for one site (one orbital for fermions):
@@ -338,14 +352,26 @@ contains
        return
     endif
     nchecks=1
+    !An explicit schedule is currently supported by iDMRG and supplies one
+    !target for each physical length.  Check every even length reached by the
+    !symmetric warm-up, from the first four-site superblock to the final one.
+    if(allocated(target_qn_schedule))then
+       nchecks=(fNlat-2)/2
     !Growth reaches 2*Ldmrg sites. The current finite algorithm adds one site
     !to each block during a sweep, so also check the target at 2*Ldmrg+2.
-    if(to_lower(DMRGtype)=="f")nchecks=2
+    elseif(to_lower(DMRGtype)=="f")then
+       nchecks=2
+    endif
     do check=1,nchecks
-       length=2*Ldmrg+2*(check-1)
-       if(any(abs(target_density)>dble(huge(0))/dble(length)))&
-            error stop "init_dmrg ERROR: final QN density exceeds integer conversion range"
-       requested=dble(int(length*target_density))+target_offset
+       if(allocated(target_qn_schedule))then
+          length=2+2*check
+          requested=target_qn_schedule(:,length)
+       else
+          length=2*Ldmrg+2*(check-1)
+          if(any(abs(target_density)>dble(huge(0))/dble(length)))&
+               error stop "init_dmrg ERROR: final QN density exceeds integer conversion range"
+          requested=dble(int(length*target_density))+target_offset
+       endif
        lower=length*target_site_min
        upper=length*target_site_max
        outside=any(requested<lower-tol).or.any(requested>upper+tol)
@@ -361,7 +387,11 @@ contains
              write(LOGfile,*)"Final QN precheck failed at length:",length
              write(LOGfile,*)"Requested target:",requested
              write(LOGfile,*)"Physical lower/upper bounds:",lower,upper
-             write(LOGfile,*)"Density:",target_density," offset:",target_offset
+             if(allocated(target_qn_schedule))then
+                write(LOGfile,*)"Target rule: explicit TargetQNs schedule"
+             else
+                write(LOGfile,*)"Density:",target_density," offset:",target_offset
+             endif
           endif
           if(outside)error stop "init_dmrg ERROR: final QN target outside physical bounds"
           error stop "init_dmrg ERROR: final QN target off charge lattice"

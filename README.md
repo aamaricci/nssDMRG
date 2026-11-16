@@ -269,7 +269,7 @@ On top of that this version includes a number of optimizations and bug fixes whi
 
 ### Site-dependent geometry
 
-`init_dmrg(Hij,ModelDot)` accepts three site layouts:
+`init_dmrg(Hij,ModelDot[,TargetQNs])` accepts three site layouts:
 
 - `size(ModelDot)=1` describes a homogeneous chain and replicates the site;
 - `size(ModelDot)=fNlat` describes an iDMRG chain in physical position order;
@@ -282,11 +282,22 @@ PBC grows each odd-length block from its center and alternates the two sides.
 The same block map is used by `DMRG_MEASURE`, so local matrices and operator
 keys remain indexed by physical position even when local dimensions differ.
 
+For iDMRG, the optional `TargetQNs` array has shape `[QNDIM,fNlat]` and
+contains the target sector at each physical superblock length.  It overrides
+the affine `QN_DENSITY`/`QN_OFFSET` rule during the complete warm-up.  This is
+useful when several conserved charges obey an additional constraint and
+therefore cannot be rounded independently at intermediate lengths.
+
 The fixed-impurity example under `drivers/Kondo1d` uses a four-state electron
 site everywhere except for one eight-state Kondo site. The impurity occupies
 the initial left PBC seed. Moving it to a later growth step would require a
 composition-dependent target-QN schedule and is deliberately rejected by the
 vanilla driver.
+
+The homogeneous twelve-state example under `drivers/KondoMobile1d` uses an
+explicit target schedule for `(Nup,Ndown,Nimp)`.  It fixes a half-filled
+conduction band and distributes the requested global impurity number over
+the symmetric warm-up while preserving `Nup+Ndown=Nc+Nimp`.
 
 
 ### <a name="milestone13"></a> Milestone 13

@@ -234,7 +234,11 @@ contains
        t_sb_get_states=t_stop()
        if(MpiMaster)then
           write(LOGfile,*)"No retained superblock states for target:",current_target_QN
-          write(LOGfile,*)"Length:",current_L," density:",target_density," offset:",target_offset
+          if(allocated(target_qn_schedule))then
+             write(LOGfile,*)"Length:",current_L," target rule: explicit schedule"
+          else
+             write(LOGfile,*)"Length:",current_L," density:",target_density," offset:",target_offset
+          endif
           write(LOGfile,*)"Check charge integrality, physical bounds and retained block sectors."
        endif
        error stop "sb_get_states ERROR: requested QN sector is empty"
@@ -1141,6 +1145,12 @@ contains
   subroutine sb_set_current_qn()
     real(8),allocatable :: requested(:),lower(:),upper(:)
     current_L         = left%length + right%length
+    if(allocated(target_qn_schedule))then
+       if(current_L>size(target_qn_schedule,2))&
+            error stop "sb_set_current_qn ERROR: current length exceeds TargetQNs"
+       current_target_QN=target_qn_schedule(:,current_L)
+       return
+    endif
     !L is the total number of sites in the two enlarged blocks.
     !Calculate each target as INT(L*rho)+offset.
     !INT discards the fractional part: INT(2.7)=2 and INT(-2.7)=-2.

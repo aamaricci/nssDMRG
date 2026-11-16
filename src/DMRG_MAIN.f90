@@ -28,16 +28,20 @@ contains
   ! symmetric left/right growth pairs by DMRG_GEOMETRY while dot remains in
   ! physical order for measurements. All ranks receive replicated inputs;
   ! MPI communicator setup is performed internally when MPI is active.
-  ! Invalid matrix shapes, site counts, local QN metadata or unsupported
-  ! finite-DMRG physical layouts terminate before numerical work begins.
-  subroutine init_dmrg(Hij,ModelDot)
+  ! TargetQNs is an optional explicit target schedule with shape
+  ! [QNDIM,fNlat], indexed by physical superblock length.  It is currently
+  ! supported by iDMRG and overrides the affine QN_DENSITY/QN_OFFSET rule at
+  ! every warm-up step.  Invalid matrix shapes, site counts, local QN metadata,
+  ! target schedules or unsupported layouts terminate before numerical work.
+  subroutine init_dmrg(Hij,ModelDot,TargetQNs)
 #ifdef _CMPLX
-    complex(8),dimension(:,:)   :: Hij
+    complex(8),dimension(:,:),intent(in)       :: Hij
 #else
-    real(8),dimension(:,:)      :: Hij
+    real(8),dimension(:,:),intent(in)          :: Hij
 #endif
-    type(site),dimension(:)     :: ModelDot
-    integer                     :: ilat
+    type(site),dimension(:),intent(in)         :: ModelDot
+    real(8),dimension(:,:),intent(in),optional :: TargetQNs
+    integer                                    :: ilat
     !
     !
 #ifdef _MPI
@@ -51,6 +55,8 @@ contains
 #endif
     !
     call wf_reset()
+    if(allocated(target_qn_schedule))deallocate(target_qn_schedule)
+    if(present(TargetQNs))allocate(target_qn_schedule,source=TargetQNs)
     !SETUP the Hopping Hamiltonian term:
     call assert_shape(Hij,[Nspin*Norb,Nspin*Norb],"Init_DMRG","Hij")
     allocate(HopH, source=Hij)
@@ -156,6 +162,7 @@ contains
     if(allocated(sb_states))deallocate(sb_states)
     if(allocated(target_density))deallocate(target_density)
     if(allocated(target_offset))deallocate(target_offset)
+    if(allocated(target_qn_schedule))deallocate(target_qn_schedule)
     if(allocated(target_site_min))deallocate(target_site_min)
     if(allocated(target_site_max))deallocate(target_site_max)
     if(allocated(current_target_QN))deallocate(current_target_QN)
@@ -443,10 +450,15 @@ contains
             "Enlarged Blocks Dim                  :",m_eleft,m_eright
        write(LOGfile,"(A,"//str(size(current_target_QN))//"F24.15)")&
             "Target_QN                            :",current_target_QN
-       write(LOGfile,"(A,"//str(size(target_density))//"F24.15)")&
-            "QN density per site                  :",target_density
-       write(LOGfile,"(A,"//str(size(target_offset))//"F24.15)")&
-            "QN total offset                      :",target_offset
+       if(allocated(target_qn_schedule))then
+          write(LOGfile,"(A)")&
+               "QN target rule                       : explicit schedule"
+       else
+          write(LOGfile,"(A,"//str(size(target_density))//"F24.15)")&
+               "QN density per site                  :",target_density
+          write(LOGfile,"(A,"//str(size(target_offset))//"F24.15)")&
+               "QN total offset                      :",target_offset
+       endif
        write(LOGfile,"(A,I12)")&
             "SuperBlock Length                    :",current_L
        write(LOGfile,"(A,3x,G24.15)")&
