@@ -51,6 +51,7 @@ MODULE SITES
   public :: spin_site
   public :: electron_site
   public :: kondo_fixed_site
+  public :: kondo_mobile_site
 
 
 contains
@@ -578,6 +579,130 @@ logical                                   :: master=.true.
 
 
 
+  !##################################################################
+  !##################################################################
+  !       MOBILE KONDO IMPURITY = ELECTRON x PROJECTED FERMION
+  !##################################################################
+  !##################################################################
+  ! Build a twelve-state fermionic site containing one conduction orbital
+  ! and one empty or singly occupied spinful impurity orbital.  Jz and Jxy
+  ! are the longitudinal and transverse Kondo couplings.  Optional Vk and
+  ! Eimp multiply the conduction and impurity densities and default to zero.
+  ! The constructor requires Nspin=2, Norb=2, DMRG_MODE='normal' and QNDIM=3.
+  !
+  ! Orbital key 1 stores the conduction annihilator C and orbital key 2 the
+  ! projected impurity annihilator D.  Both use the total local fermion
+  ! parity, including PBC previous-link copies when requested.  The optional
+  ! sparse outputs expose local observables without propagating them during
+  ! block growth.  Invalid model dimensions terminate with error stop.
+  function kondo_mobile_site(Jz,Jxy,Vk,Eimp,Simp_z,Simp_p,Sele_z,&
+       Sele_p,Nimp_op) result(self)
+    real(8),intent(in)                        :: Jz,Jxy
+    real(8),intent(in),optional               :: Vk,Eimp
+    type(sparse_matrix),intent(out),optional  :: Simp_z,Simp_p
+    type(sparse_matrix),intent(out),optional  :: Sele_z,Sele_p
+    type(sparse_matrix),intent(out),optional  :: Nimp_op
+    type(site)                                :: self
+#ifdef _CMPLX
+    complex(8),dimension(:,:),allocatable     :: H,F,P
+    complex(8),dimension(:,:),allocatable     :: Si_z,Si_p,Se_z,Se_p,Nimp
+#else
+    real(8),dimension(:,:),allocatable        :: H,F,P
+    real(8),dimension(:,:),allocatable        :: Si_z,Si_p,Se_z,Se_p,Nimp
+#endif
+    integer,dimension(:),allocatable          :: Basis
+    integer                                   :: iorb,ispin
+    real(8)                                   :: Vk_,Eimp_
+    real(8),dimension(3)                      :: dq0,dqF
+    character(len=:),allocatable              :: key
+    !
+    ! Validate the local model and symmetry contract.
+    if(Nspin/=2)error stop 'kondo_mobile_site: Nspin must be 2'
+    if(Norb/=2)error stop 'kondo_mobile_site: Norb must be 2'
+    if(to_lower(trim(dmrg_mode))/='normal')&
+         error stop "kondo_mobile_site: DMRG_MODE must be 'normal'"
+    if(QNdim/=3)error stop 'kondo_mobile_site: QNDIM must be 3'
+    !
+    ! Select optional local energies.
+    Vk_  =0d0
+    Eimp_=0d0
+    if(present(Vk))  Vk_  =Vk
+    if(present(Eimp))Eimp_=Eimp
+    !
+    ! Build the local Hamiltonian and measurement operators.
+    H    =Build_KondoMobile_Hamiltonian(Jz,Jxy,Vk_,Eimp_)
+    P    =Build_KondoMobile_Parity()
+    Si_z =Build_KondoMobile_ImpuritySpin('z')
+    Si_p =Build_KondoMobile_ImpuritySpin('+')
+    Se_z =Build_KondoMobile_ElectronSpin('z')
+    Se_p =Build_KondoMobile_ElectronSpin('+')
+    Nimp =Build_KondoMobile_Number()
+    Basis=Build_KondoMobile_BasisQN()
+    !
+    ! Register the two orbital species in the common fermionic schema.
+    call self%free()
+    self%SiteType='FERMION'
+    self%OpName='C'
+    self%Dim=size(H,1)
+    dq0=0d0
+    call self%put('H',sparse(H),'bosonic',dq=dq0)
+    do ispin=1,Nspin
+       do iorb=1,Norb
+          select case(iorb)
+          case(1)
+             F=Build_KondoMobile_C(ispin)
+             dqF=0d0
+             dqF(ispin)=-1d0
+          case(2)
+             F=Build_KondoMobile_D(ispin)
+             dqF=0d0
+             dqF(ispin)=-1d0
+             dqF(3)=-1d0
+          end select
+          key=self%OpName//self%okey(iorb,ispin,ilink='n')
+          call self%put(key,sparse(F),'fermionic',dq=dqF)
+       enddo
+    enddo
+    key='P'//self%okey(0,0,ilink='n')
+    call self%put(key,sparse(P),'psign',dq=dq0)
+    if(PBCdmrg)then
+       do ispin=1,Nspin
+          do iorb=1,Norb
+             select case(iorb)
+             case(1)
+                F=Build_KondoMobile_C(ispin)
+                dqF=0d0
+                dqF(ispin)=-1d0
+             case(2)
+                F=Build_KondoMobile_D(ispin)
+                dqF=0d0
+                dqF(ispin)=-1d0
+                dqF(3)=-1d0
+             end select
+             key=self%OpName//self%okey(iorb,ispin,ilink='p')
+             call self%put(key,sparse(F),'fermionic',dq=dqF)
+          enddo
+       enddo
+       key='P'//self%okey(0,0,ilink='p')
+       call self%put(key,sparse(P),'psign',dq=dq0)
+    endif
+    !
+    ! Store (Nup_total,Ndown_total,Nimp) for every local basis state.
+    allocate(self%sectors(1))
+    self%sectors(1)=sectors_list(tbasis(Basis,Qdim=3))
+    !
+    ! Return unregistered local observables on request.
+    if(present(Simp_z)) Simp_z =sparse(Si_z)
+    if(present(Simp_p)) Simp_p =sparse(Si_p)
+    if(present(Sele_z)) Sele_z =sparse(Se_z)
+    if(present(Sele_p)) Sele_p =sparse(Se_p)
+    if(present(Nimp_op))Nimp_op=sparse(Nimp)
+    !
+  end function kondo_mobile_site
+
+
+
+
 END MODULE SITES
 
 
@@ -601,21 +726,27 @@ END MODULE SITES
 !##################################################################
 #ifdef _TEST
 program testSITES
-  USE SCIFOR
+  USE SCIFOR, only: zero,one,pauli_0,pauli_x,pauli_z,kron
   USE INPUT_VARS
   USE MATRIX_SPARSE
   USE LIST_OPERATORS
   USE TUPLE_BASIS
   USE LIST_SECTORS
   USE HLOCAL, only: Get_QNdimension
+  USE KONDO_LOCAL
   USE SITES
   implicit none
   type(site)                          :: my_site,a,b
   type(tbasis)                        :: sz_basis
+  type(tbasis)                        :: mobile_basis
+  type(sparse_matrix)                 :: measured_Sz,measured_Sp
+  type(sparse_matrix)                 :: measured_eSz,measured_eSp
+  type(sparse_matrix)                 :: measured_Nimp
   real(8),dimension(1,3)              :: spin_dqs
   real(8),dimension(:),allocatable    :: expected_dq
+  real(8),dimension(:),allocatable    :: mobile_basis_flat
   character(len=:),allocatable        :: op_key
-  integer                             :: i
+  integer                             :: i,iorb,ispin
 #ifdef _CMPLX
   complex(8),dimension(2,2),parameter :: Hzero=reshape([zero,zero,zero,zero],[2,2])
   complex(8),dimension(2,2),parameter :: S0=pauli_0
@@ -721,6 +852,118 @@ program testSITES
   print*,"Is site valid:",b%is_valid()
   call b%free()
 
+
+  ! Test the mobile Kondo-site dictionary with both PBC boundary copies.
+  Nspin=2
+  Norb=2
+  QNdim=3
+  dmrg_mode='normal'
+  PBCdmrg=.true.
+  b=kondo_mobile_site(0.73d0,1.17d0,Vk=0.23d0,Eimp=-0.19d0,&
+       Simp_z=measured_Sz,Simp_p=measured_Sp,Sele_z=measured_eSz,&
+       Sele_p=measured_eSp,Nimp_op=measured_Nimp)
+  call assert_true(b%Dim==12,'kondo_mobile_site: dimension')
+  call assert_true(b%is_valid(),&
+       'kondo_mobile_site: valid site')
+  call assert_true(b%name()=='C',&
+       'kondo_mobile_site: operator name')
+  call assert_true(b%type()=='fermion',&
+       'kondo_mobile_site: site type')
+  call assert_true(size(b%operators)==11,&
+       'kondo_mobile_site: operator count')
+  call assert_true(b%operators%has_valid_dq(qdim=3),&
+       'kondo_mobile_site: complete dq metadata')
+  !
+  call assert_dq(b%operators%dq(key='H'),[0d0,0d0,0d0],&
+       'kondo_mobile_site: H dq')
+  call assert_sparse_close(b%operators%op(key='H'),&
+       Build_KondoMobile_Hamiltonian(&
+       0.73d0,1.17d0,Vk=0.23d0,Eimp=-0.19d0),&
+       'kondo_mobile_site: H matrix')
+  do ispin=1,Nspin
+     do iorb=1,Norb
+        expected_dq=[0d0,0d0,0d0]
+        expected_dq(ispin)=-1d0
+        if(iorb==2)expected_dq(3)=-1d0
+        !
+        op_key=b%name()//b%okey(iorb,ispin,ilink='n')
+        call assert_true(b%operators%has_key(op_key),&
+             'kondo_mobile_site: next fermion key')
+        call assert_dq(b%operators%dq(key=op_key),expected_dq,&
+             'kondo_mobile_site: next fermion dq')
+        if(iorb==1)then
+           call assert_sparse_close(b%operators%op(key=op_key),&
+                Build_KondoMobile_C(ispin),&
+                'kondo_mobile_site: next C matrix')
+        else
+           call assert_sparse_close(b%operators%op(key=op_key),&
+                Build_KondoMobile_D(ispin),&
+                'kondo_mobile_site: next D matrix')
+        endif
+        !
+        op_key=b%name()//b%okey(iorb,ispin,ilink='p')
+        call assert_true(b%operators%has_key(op_key),&
+             'kondo_mobile_site: previous fermion key')
+        call assert_dq(b%operators%dq(key=op_key),expected_dq,&
+             'kondo_mobile_site: previous fermion dq')
+        if(iorb==1)then
+           call assert_sparse_close(b%operators%op(key=op_key),&
+                Build_KondoMobile_C(ispin),&
+                'kondo_mobile_site: previous C matrix')
+        else
+           call assert_sparse_close(b%operators%op(key=op_key),&
+                Build_KondoMobile_D(ispin),&
+                'kondo_mobile_site: previous D matrix')
+        endif
+     enddo
+  enddo
+  !
+  op_key='P'//b%okey(0,0,ilink='n')
+  call assert_true(b%operators%has_key(op_key),&
+       'kondo_mobile_site: next parity key')
+  call assert_dq(b%operators%dq(key=op_key),[0d0,0d0,0d0],&
+       'kondo_mobile_site: next parity dq')
+  call assert_sparse_close(b%operators%op(key=op_key),&
+       Build_KondoMobile_Parity(),&
+       'kondo_mobile_site: next parity matrix')
+  op_key='P'//b%okey(0,0,ilink='p')
+  call assert_true(b%operators%has_key(op_key),&
+       'kondo_mobile_site: previous parity key')
+  call assert_dq(b%operators%dq(key=op_key),[0d0,0d0,0d0],&
+       'kondo_mobile_site: previous parity dq')
+  call assert_sparse_close(b%operators%op(key=op_key),&
+       Build_KondoMobile_Parity(),&
+       'kondo_mobile_site: previous parity matrix')
+  !
+  call b%get_basis(mobile_basis)
+  mobile_basis_flat=mobile_basis%flat()
+  call assert_true(size(mobile_basis_flat)==36,&
+       'kondo_mobile_site: basis size')
+  call assert_true(all(abs(mobile_basis_flat-&
+       dble(Build_KondoMobile_BasisQN()))<1d-12),&
+       'kondo_mobile_site: basis charges')
+  call assert_sparse_close(measured_Sz,&
+       Build_KondoMobile_ImpuritySpin('z'),&
+       'kondo_mobile_site: returned impurity Sz')
+  call assert_sparse_close(measured_Sp,&
+       Build_KondoMobile_ImpuritySpin('+'),&
+       'kondo_mobile_site: returned impurity S+')
+  call assert_sparse_close(measured_eSz,&
+       Build_KondoMobile_ElectronSpin('z'),&
+       'kondo_mobile_site: returned electron Sz')
+  call assert_sparse_close(measured_eSp,&
+       Build_KondoMobile_ElectronSpin('+'),&
+       'kondo_mobile_site: returned electron S+')
+  call assert_sparse_close(measured_Nimp,Build_KondoMobile_Number(),&
+       'kondo_mobile_site: returned Nimp')
+  call mobile_basis%free()
+  call measured_Sz%free()
+  call measured_Sp%free()
+  call measured_eSz%free()
+  call measured_eSp%free()
+  call measured_Nimp%free()
+  call b%free()
+
   print*,"SITE DQ TESTS: PASS"
 
 contains
@@ -741,5 +984,23 @@ contains
     call assert_true(size(actual)==size(expected),trim(message)//": size")
     call assert_true(all(abs(actual-expected)<1d-12),trim(message)//": value")
   end subroutine assert_dq
+
+
+  subroutine assert_sparse_close(actual,expected,message)
+    type(sparse_matrix),intent(in) :: actual
+#ifdef _CMPLX
+    complex(8),dimension(:,:),intent(in) :: expected
+    complex(8),dimension(:,:),allocatable :: dense
+#else
+    real(8),dimension(:,:),intent(in) :: expected
+    real(8),dimension(:,:),allocatable :: dense
+#endif
+    character(len=*),intent(in) :: message
+    dense=actual%as_matrix()
+    call assert_true(all(shape(dense)==shape(expected)),&
+         trim(message)//': shape')
+    call assert_true(maxval(abs(dense-expected))<1d-12,&
+         trim(message)//': value')
+  end subroutine assert_sparse_close
 end program testSITES
 #endif
